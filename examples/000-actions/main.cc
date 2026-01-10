@@ -26,8 +26,6 @@
 #include <actionengine/service/service.h>
 #include <actionengine/util/random.h>
 
-ABSL_FLAG(uint16_t, port, 20000, "Port to bind to.");
-
 // Simply some type aliases to make the code more readable.
 using Action = act::Action;
 using ActionRegistry = act::ActionRegistry;
@@ -173,7 +171,6 @@ absl::Status Main(int argc, char** argv) {
   absl::InstallFailureSignalHandler({});
   absl::ParseCommandLine(argc, argv);
 
-  const uint16_t port = absl::GetFlag(FLAGS_port);
   // We will use the same action registry for the server and the client.
   ActionRegistry action_registry = MakeActionRegistry();
   // This is enough to run the server. Notice how Service is decoupled from
@@ -184,7 +181,7 @@ absl::Status Main(int argc, char** argv) {
   // zmq streams and msgpack messages in one of the showcases.
   act::Service service(&action_registry);
   act::net::WebRtcServer server(
-      &service, "127.0.0.1", port,
+      &service, "127.0.0.1",
       /*signalling_identity=*/"server",
       /*signalling_url=*/"wss://actionengine.dev:19001",
       /*rtc_config=*/std::nullopt);

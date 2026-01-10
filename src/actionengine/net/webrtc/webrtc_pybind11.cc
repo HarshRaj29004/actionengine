@@ -55,6 +55,7 @@ namespace py = ::pybind11;
 void BindTurnServer(py::handle scope, std::string_view name) {
   py::classh<net::TurnServer>(scope, std::string(name).c_str(),
                               "A TURN server configuration.")
+      .def(py::init([]() { return net::TurnServer{}; }))
       .def_static(
           "from_string",
           [](std::string_view server) {

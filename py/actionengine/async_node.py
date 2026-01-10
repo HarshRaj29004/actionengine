@@ -93,9 +93,13 @@ class AsyncNode(_C.nodes.AsyncNode):
             "readers_deserialise_automatically",
         )
 
-    def _consume_sync(self, timeout: float = -1.0):
+    def _consume_sync(
+        self, timeout: float = -1.0, allow_none: bool = False
+    ) -> Any:
         item = self.next_sync(timeout)
         if item is None:
+            if allow_none:
+                return None
             raise RuntimeError(
                 "Node is empty while expecting exactly one item."
             )
@@ -105,13 +109,15 @@ class AsyncNode(_C.nodes.AsyncNode):
             )
         return item
 
-    def consume(self, timeout: float = -1.0) -> Any | Awaitable[Any]:
+    def consume(
+        self, timeout: float = -1.0, allow_none: bool = False
+    ) -> Any | Awaitable[Any]:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return self._consume_sync(timeout)
+            return self._consume_sync(timeout, allow_none)
         return asyncio.create_task(
-            asyncio.to_thread(self._consume_sync, timeout)
+            asyncio.to_thread(self._consume_sync, timeout, allow_none)
         )
 
     async def next(self, timeout: float = -1.0):

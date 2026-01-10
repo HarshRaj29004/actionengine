@@ -152,7 +152,8 @@ std::string AbslUnparseFlag(const std::vector<act::net::TurnServer>& servers) {
                        });
 }
 
-rtc::Configuration RtcConfig::BuildLibdatachannelConfig() const {
+absl::StatusOr<rtc::Configuration> RtcConfig::BuildLibdatachannelConfig()
+    const {
   rtc::Configuration config;
   config.maxMessageSize = max_message_size;
   config.portRangeBegin = 1024;
@@ -160,14 +161,108 @@ rtc::Configuration RtcConfig::BuildLibdatachannelConfig() const {
   config.enableIceUdpMux = enable_ice_udp_mux;
 
   for (const auto& server : stun_servers) {
-    config.iceServers.emplace_back(server);
+    try {
+      config.iceServers.emplace_back(server);
+    } catch (const std::exception& exc) {
+      return absl::InvalidArgumentError(absl::StrFormat(
+          "Failed to parse STUN server URL '%s': %s", server, exc.what()));
+    }
   }
   for (const auto& server : turn_servers) {
-    config.iceServers.emplace_back(server.hostname, server.port,
-                                   server.username, server.password);
+    try {
+      config.iceServers.emplace_back(server.hostname, server.port,
+                                     server.username, server.password);
+    } catch (const std::exception& exc) {
+      return absl::InvalidArgumentError(
+          absl::StrFormat("Failed to parse TURN server URL '%s:%d': %s",
+                          server.hostname, server.port, exc.what()));
+    }
   }
 
   return config;
+}
+
+absl::StatusOr<WebRtcDataChannelConnection> EstablishmentState::Wait(
+    absl::Time deadline) {
+  thread::Case on_signalling_error = signalling_client_ != nullptr
+                                         ? signalling_client_->OnError()
+                                         : thread::NonSelectableCase();
+  const int selected = thread::SelectUntil(
+      deadline, {done_.OnEvent(), thread::OnCancel(), on_signalling_error});
+  EnsureNoCallbacks();
+
+  if (connection_ == nullptr || data_channel_ == nullptr) {
+    return absl::InternalError(
+        "WebRtcDataChannel establishment failed: missing connection or "
+        "data channel.");
+  }
+
+  if (selected == -1) {
+    return absl::DeadlineExceededError(
+        "WebRtcDataChannel establishment timed out.");
+  }
+
+  if (thread::Cancelled()) {
+    if (signalling_client_ != nullptr) {
+      signalling_client_->Cancel();
+    }
+
+    return absl::CancelledError("WebRtcDataChannel establishment cancelled.");
+  }
+
+  if (!status_.ok()) {
+    return status_;
+  }
+
+  if (selected == 2) {
+    // safe to do as we have already checked signalling_client_ != nullptr
+    return signalling_client_->GetStatus();
+  }
+
+  if (!data_channel_->isOpen()) {
+    return absl::InternalError(
+        "WebRtcWireStream data channel is not open, likely due to a failed "
+        "connection.");
+  }
+
+  return WebRtcDataChannelConnection{
+      .connection = std::move(connection_),
+      .data_channel = std::move(data_channel_),
+  };
+}
+
+void EstablishmentState::ReportDoneWithStatus(absl::Status status) {
+  EnsureNoCallbacks();
+  status_.Update(std::move(status));
+  if (!done_.HasBeenNotified()) {
+    done_.Notify();
+  }
+}
+
+EstablishmentState::~EstablishmentState() {
+  EnsureNoCallbacks();
+  if (!done_.HasBeenNotified()) {
+    done_.Notify();
+  }
+}
+
+SignallingClient* EstablishmentState::signalling_client() const {
+  return signalling_client_.get();
+}
+
+void EstablishmentState::set_signalling_client(
+    std::unique_ptr<SignallingClient> signalling_client) {
+  signalling_client_ = std::move(signalling_client);
+}
+
+void EstablishmentState::EnsureNoCallbacks() const {
+  if (signalling_client_ != nullptr) {
+    signalling_client_->ResetCallbacks();
+  }
+
+  if (connection_ != nullptr) {
+    connection_->resetCallbacks();
+  }
 }
 
 WebRtcWireStream::WebRtcWireStream(
@@ -453,29 +548,98 @@ void WebRtcWireStream::CloseOnError(absl::Status status)
 static absl::StatusOr<rtc::Description> ParseDescriptionFromMessage(
     const boost::json::value& message) {
   boost::system::error_code error;
-  if (const auto desc_ptr = message.find_pointer("/description", error);
-      desc_ptr != nullptr && !error) {
-    const auto description = desc_ptr->as_string().c_str();
-    return rtc::Description(description);
+
+  const auto desc_ptr = message.find_pointer("/description", error);
+  if (error) {
+    return absl::InvalidArgumentError(
+        "Error parsing 'description' field in signalling message: " +
+        boost::json::serialize(message));
   }
 
-  return absl::InvalidArgumentError(
-      "No 'description' field in signalling message: " +
-      boost::json::serialize(message));
+  if (desc_ptr == nullptr) {
+    return absl::InvalidArgumentError(
+        "No 'description' field in signalling message: " +
+        boost::json::serialize(message));
+  }
+
+  const boost::system::result<const boost::json::string&> desc_or =
+      desc_ptr->try_as_string();
+  if (desc_or.has_error()) {
+    return absl::InvalidArgumentError(
+        "'description' field is not a string in signalling message: " +
+        boost::json::serialize(message));
+  }
+
+  // Libdatachannel will throw an exception if the description is invalid, so
+  // we need to catch it and return an error instead.
+  try {
+    return rtc::Description(desc_or->c_str());
+  } catch (const std::exception& exc) {
+    return absl::InvalidArgumentError(
+        "Error parsing description from signalling message: " +
+        boost::json::serialize(message) + ". Exception: " + exc.what());
+  }
 }
 
 static absl::StatusOr<rtc::Candidate> ParseCandidateFromMessage(
     const boost::json::value& message) {
   boost::system::error_code error;
-  if (const auto candidate_ptr = message.find_pointer("/candidate", error);
-      candidate_ptr != nullptr && !error) {
-    const auto candidate_str = candidate_ptr->as_string().c_str();
-    return rtc::Candidate(candidate_str);
+
+  const auto type_ptr = message.find_pointer("/type", error);
+  if (error) {
+    return absl::InvalidArgumentError(
+        "Error parsing 'type' field in signalling message: " +
+        boost::json::serialize(message));
   }
 
-  return absl::InvalidArgumentError(
-      "No 'candidate' field in signalling message: " +
-      boost::json::serialize(message));
+  const auto candidate_ptr = message.find_pointer("/candidate", error);
+  if (error) {
+    return absl::InvalidArgumentError(
+        "Error parsing 'candidate' field in signalling message: " +
+        boost::json::serialize(message));
+  }
+
+  if (type_ptr == nullptr) {
+    return absl::InvalidArgumentError(
+        "No 'type' field in signalling message: " +
+        boost::json::serialize(message));
+  }
+  if (candidate_ptr == nullptr) {
+    return absl::InvalidArgumentError(
+        "No 'candidate' field in signalling message: " +
+        boost::json::serialize(message));
+  }
+
+  const boost::system::result<const boost::json::string&> type_or =
+      type_ptr->try_as_string();
+  if (type_or.has_error()) {
+    return absl::InvalidArgumentError(
+        "'type' field is not a string in signalling message: " +
+        boost::json::serialize(message));
+  }
+
+  if (*type_or != "candidate") {
+    return absl::InvalidArgumentError("Not a candidate message: " +
+                                      boost::json::serialize(message));
+  }
+
+  const boost::system::result<const boost::json::string&> candidate_or =
+      candidate_ptr->try_as_string();
+  if (candidate_or.has_error()) {
+    return absl::InvalidArgumentError(
+        "'candidate' field is not a string in signalling message: " +
+        boost::json::serialize(message));
+  }
+
+  // Libdatachannel will throw an exception if the candidate is invalid, so
+  // we need to catch it and return an error instead.
+  try {
+    return rtc::Candidate(candidate_or->c_str());
+  } catch (const std::exception& exc) {
+    return absl::InvalidArgumentError(
+        "Error parsing candidate from signalling message: " +
+        boost::json::serialize(message) + ". Exception: " + exc.what());
+  }
 }
 
 static std::string MakeCandidateMessage(std::string_view peer_id,
@@ -503,43 +667,55 @@ absl::StatusOr<WebRtcDataChannelConnection> StartWebRtcDataChannel(
     std::string_view identity, std::string_view peer_identity,
     std::string_view signalling_address, uint16_t signalling_port,
     std::optional<RtcConfig> rtc_config, bool use_ssl,
-    const absl::flat_hash_map<std::string, std::string>& headers) {
-  SignallingClient signalling_client{signalling_address, signalling_port,
-                                     use_ssl};
+    const absl::flat_hash_map<std::string, std::string>& headers) noexcept {
+  auto state = std::make_shared<EstablishmentState>();
+
+  state->set_signalling_client(std::make_unique<SignallingClient>(
+      signalling_address, signalling_port, use_ssl));
 
   RtcConfig config = std::move(rtc_config).value_or(RtcConfig());
+  ASSIGN_OR_RETURN(rtc::Configuration rtc_config_libdatachannel,
+                   config.BuildLibdatachannelConfig());
 
-  auto connection =
-      std::make_unique<rtc::PeerConnection>(config.BuildLibdatachannelConfig());
+  // Create PeerConnection which may throw if configuration is invalid.
+  try {
+    state->set_connection(std::make_unique<rtc::PeerConnection>(
+        std::move(rtc_config_libdatachannel)));
+  } catch (const std::exception& exc) {
+    return absl::InternalError(
+        absl::StrFormat("Error creating PeerConnection: %s", exc.what()));
+  }
 
-  thread::PermanentEvent done;
-  absl::Status status;
-
-  signalling_client.OnAnswer([&connection,
-                              peer_identity = std::string(peer_identity), &done,
-                              &status](std::string_view received_peer_id,
-                                       const boost::json::value& message) {
-    if (received_peer_id != peer_identity) {
-      return;
-    }
-
-    absl::StatusOr<rtc::Description> description =
-        ParseDescriptionFromMessage(message);
-    if (!description.ok()) {
-      status = description.status();
-      if (!done.HasBeenNotified()) {
-        done.Notify();
-      }
-
-      return;
-    }
-    connection->setRemoteDescription(*std::move(description));
-  });
-
-  signalling_client.OnCandidate(
-      [&connection, peer_identity = std::string(peer_identity), &done, &status](
+  // Set up signalling client callbacks to handle answers and remote ICE
+  // candidates by updating the PeerConnection state.
+  state->signalling_client()->OnAnswer(
+      [peer_identity = std::string(peer_identity), state](
           std::string_view received_peer_id,
-          const boost::json::value& message) {
+          const boost::json::value& message) noexcept {
+        if (received_peer_id != peer_identity) {
+          DLOG(INFO) << "Ignoring answer for a different peer ID: "
+                     << received_peer_id;
+          return;
+        }
+
+        absl::StatusOr<rtc::Description> description =
+            ParseDescriptionFromMessage(message);
+        if (!description.ok()) {
+          state->ReportDoneWithStatus(description.status());
+          return;
+        }
+
+        try {
+          state->connection()->setRemoteDescription(*std::move(description));
+        } catch (const std::exception& exc) {
+          state->ReportDoneWithStatus(absl::InternalError(absl::StrFormat(
+              "Error setting remote description: %s", exc.what())));
+        }
+      });
+  state->signalling_client()->OnCandidate(
+      [peer_identity = std::string(peer_identity), state](
+          std::string_view received_peer_id,
+          const boost::json::value& message) noexcept {
         if (received_peer_id != peer_identity) {
           return;
         }
@@ -547,86 +723,87 @@ absl::StatusOr<WebRtcDataChannelConnection> StartWebRtcDataChannel(
         absl::StatusOr<rtc::Candidate> candidate =
             ParseCandidateFromMessage(message);
         if (!candidate.ok()) {
-          status = candidate.status();
-          if (!done.HasBeenNotified()) {
-            done.Notify();
-          }
+          state->ReportDoneWithStatus(candidate.status());
           return;
         }
-        connection->addRemoteCandidate(*std::move(candidate));
+
+        try {
+          state->connection()->addRemoteCandidate(*std::move(candidate));
+        } catch (const std::exception& exc) {
+          state->ReportDoneWithStatus(absl::InternalError(absl::StrFormat(
+              "Error adding remote candidate: %s", exc.what())));
+        }
       });
 
-  connection->onLocalCandidate([peer_id = std::string(peer_identity),
-                                &signalling_client, &done,
-                                &status](const rtc::Candidate& candidate) {
-    const std::string message = MakeCandidateMessage(peer_id, candidate);
-    status.Update(signalling_client.Send(message));
-    if (!status.ok()) {
-      if (!done.HasBeenNotified()) {
-        done.Notify();
-      }
-    }
-  });
+  auto local_candidate_channel =
+      std::make_shared<thread::Channel<rtc::Candidate>>(16);
+  state->connection()->onLocalCandidate(
+      [peer_id = std::string(peer_identity), state,
+       local_candidate_channel](const rtc::Candidate& candidate) noexcept {
+        if (state->should_send_candidates()) {
+          local_candidate_channel->writer()->WriteUnlessCancelled(candidate);
+        }
+      });
+  state->connection()->onIceStateChange(
+      [state, local_candidate_channel](
+          rtc::PeerConnection::IceState ice_state) noexcept {
+        if (ice_state == rtc::PeerConnection::IceState::Connected ||
+            ice_state == rtc::PeerConnection::IceState::Completed ||
+            ice_state == rtc::PeerConnection::IceState::Disconnected ||
+            ice_state == rtc::PeerConnection::IceState::Closed ||
+            ice_state == rtc::PeerConnection::IceState::Failed) {
+          if (state->should_send_candidates()) {
+            state->set_should_send_candidates(false);
+            local_candidate_channel->writer()->Close();
+          }
+        }
+        if (ice_state == rtc::PeerConnection::IceState::Failed) {
+          state->connection()->resetCallbacks();
+          state->connection()->close();
+          state->ReportDoneWithStatus(absl::InternalError(
+              "WebRtcWireStream connection failed during ICE negotiation"));
+        }
+      });
 
-  RETURN_IF_ERROR(signalling_client.ConnectWithIdentity(identity, headers));
+  RETURN_IF_ERROR(
+      state->signalling_client()->ConnectWithIdentity(identity, headers));
 
   auto init = rtc::DataChannelInit{};
   init.reliability.unordered = true;
-  auto data_channel =
-      connection->createDataChannel(std::string(identity), std::move(init));
+  try {
+    state->set_data_channel(state->connection()->createDataChannel(
+        std::string(identity), std::move(init)));
+  } catch (const std::exception& exc) {
+    return absl::InternalError(
+        absl::StrFormat("Error creating data channel: %s", exc.what()));
+  }
 
-  std::string offer_message =
-      MakeOfferMessage(peer_identity, connection->createOffer());
-  RETURN_IF_ERROR(signalling_client.Send(offer_message));
+  std::string offer_message;
+  try {
+    offer_message =
+        MakeOfferMessage(peer_identity, state->connection()->createOffer());
+  } catch (const std::exception& exc) {
+    return absl::InternalError(
+        absl::StrFormat("Error creating offer: %s", exc.what()));
+  }
+  state->data_channel()->onOpen(
+      [state]() { state->ReportDoneWithStatus(absl::OkStatus()); });
+  RETURN_IF_ERROR(state->signalling_client()->Send(offer_message));
 
-  data_channel->onOpen([&done]() {
-    if (!done.HasBeenNotified()) {
-      done.Notify();
-    }
-  });
-  connection->onIceStateChange([&done, connection = connection.get()](
-                                   rtc::PeerConnection::IceState state) {
-    if (state == rtc::PeerConnection::IceState::Failed) {
-      connection->resetCallbacks();
-      connection->close();
-      if (!done.HasBeenNotified()) {
-        done.Notify();
+  rtc::Candidate candidate;
+  while (local_candidate_channel->reader()->Read(&candidate)) {
+    if (state->should_send_candidates()) {
+      const std::string message =
+          MakeCandidateMessage(peer_identity, candidate);
+      if (absl::Status send_status = state->signalling_client()->Send(message);
+          !send_status.ok()) {
+        state->ReportDoneWithStatus(std::move(send_status));
+        break;
       }
     }
-  });
-
-  const int selected = thread::SelectUntil(
-      absl::Now() + absl::Seconds(30),
-      {done.OnEvent(), signalling_client.OnError(), thread::OnCancel()});
-  signalling_client.ResetCallbacks();
-
-  if (!status.ok() || !signalling_client.GetStatus().ok()) {
-    connection->resetCallbacks();
-    connection->close();
   }
 
-  RETURN_IF_ERROR(status);
-  RETURN_IF_ERROR(signalling_client.GetStatus());
-  if (thread::Cancelled()) {
-    return absl::CancelledError("WebRtcWireStream connection cancelled");
-  }
-
-  // data_channel->resetCallbacks();
-
-  if (!data_channel->isOpen()) {
-    if (selected == -1) {
-      return absl::DeadlineExceededError(
-          "WebRtcWireStream data channel failed to open within timeout.");
-    }
-    return absl::InternalError(
-        "WebRtcWireStream data channel is not open, likely due to a failed "
-        "connection.");
-  }
-
-  return WebRtcDataChannelConnection{
-      .connection = std::move(connection),
-      .data_channel = std::move(data_channel),
-  };
+  return state->Wait(absl::Now() + absl::Seconds(30));
 }
 
 absl::StatusOr<std::unique_ptr<WebRtcWireStream>> StartStreamWithSignalling(

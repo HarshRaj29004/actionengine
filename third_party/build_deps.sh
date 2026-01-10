@@ -177,6 +177,8 @@ mkdir -p "${build_folder_name}" && cd "${build_folder_name}"
 cmake \
   -DUSE_GNUTLS=0 \
   -DUSE_NICE=0 \
+  -DENABLE_LOCALHOST_ADDRESS=1 \
+  -DENABLE_LOCAL_ADDRESS_TRANSLATION=1 \
   -DNO_MEDIA=1 \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_STANDARD="${cc_standard}" \

@@ -140,39 +140,123 @@ static std::string MakeAnswerMessage(std::string_view peer_id,
 static absl::StatusOr<rtc::Description> ParseDescriptionFromOfferMessage(
     const boost::json::value& message) {
   boost::system::error_code error;
-  if (const auto type_ptr = message.find_pointer("/type", error);
-      type_ptr == nullptr || error || type_ptr->as_string() != "offer") {
-    return absl::InvalidArgumentError("Not an offer message: " +
-                                      boost::json::serialize(message));
+
+  const auto type_ptr = message.find_pointer("/type", error);
+  if (error) {
+    return absl::InvalidArgumentError(
+        "Error parsing 'type' field in signalling message: " +
+        boost::json::serialize(message));
   }
 
   const auto desc_ptr = message.find_pointer("/description", error);
-  if (desc_ptr == nullptr || error) {
+  if (error) {
+    return absl::InvalidArgumentError(
+        "Error parsing 'description' field in signalling message: " +
+        boost::json::serialize(message));
+  }
+
+  if (type_ptr == nullptr) {
+    return absl::InvalidArgumentError(
+        "No 'type' field in signalling message: " +
+        boost::json::serialize(message));
+  }
+  if (desc_ptr == nullptr) {
     return absl::InvalidArgumentError(
         "No 'description' field in signalling message: " +
         boost::json::serialize(message));
   }
 
-  return rtc::Description(desc_ptr->as_string().c_str());
+  const boost::system::result<const boost::json::string&> type_or =
+      type_ptr->try_as_string();
+  if (type_or.has_error()) {
+    return absl::InvalidArgumentError(
+        "'type' field is not a string in signalling message: " +
+        boost::json::serialize(message));
+  }
+
+  const boost::system::result<const boost::json::string&> desc_or =
+      desc_ptr->try_as_string();
+  if (desc_or.has_error()) {
+    return absl::InvalidArgumentError(
+        "'description' field is not a string in signalling message: " +
+        boost::json::serialize(message));
+  }
+
+  if (*type_or != "offer") {
+    return absl::InvalidArgumentError("Not an offer message: " +
+                                      boost::json::serialize(message));
+  }
+
+  // Libdatachannel will throw an exception if the description is invalid, so
+  // we need to catch it and return an error instead.
+  try {
+    return rtc::Description(desc_or->c_str());
+  } catch (const std::exception& exc) {
+    return absl::InvalidArgumentError(
+        "Error parsing description from signalling message: " +
+        boost::json::serialize(message) + ". Exception: " + exc.what());
+  }
 }
 
 static absl::StatusOr<rtc::Candidate> ParseCandidateFromMessage(
     const boost::json::value& message) {
   boost::system::error_code error;
-  if (const auto type_ptr = message.find_pointer("/type", error);
-      type_ptr == nullptr || error || type_ptr->as_string() != "candidate") {
-    return absl::InvalidArgumentError("Not a candidate message: " +
-                                      boost::json::serialize(message));
+
+  const auto type_ptr = message.find_pointer("/type", error);
+  if (error) {
+    return absl::InvalidArgumentError(
+        "Error parsing 'type' field in signalling message: " +
+        boost::json::serialize(message));
   }
 
   const auto candidate_ptr = message.find_pointer("/candidate", error);
-  if (candidate_ptr == nullptr || error) {
+  if (error) {
+    return absl::InvalidArgumentError(
+        "Error parsing 'candidate' field in signalling message: " +
+        boost::json::serialize(message));
+  }
+
+  if (type_ptr == nullptr) {
+    return absl::InvalidArgumentError(
+        "No 'type' field in signalling message: " +
+        boost::json::serialize(message));
+  }
+  if (candidate_ptr == nullptr) {
     return absl::InvalidArgumentError(
         "No 'candidate' field in signalling message: " +
         boost::json::serialize(message));
   }
 
-  return rtc::Candidate(candidate_ptr->as_string().c_str());
+  const boost::system::result<const boost::json::string&> type_or =
+      type_ptr->try_as_string();
+  if (type_or.has_error()) {
+    return absl::InvalidArgumentError(
+        "'type' field is not a string in signalling message: " +
+        boost::json::serialize(message));
+  }
+
+  if (*type_or != "candidate") {
+    return absl::InvalidArgumentError("Not a candidate message: " +
+                                      boost::json::serialize(message));
+  }
+
+  const boost::system::result<const boost::json::string&> candidate_or =
+      candidate_ptr->try_as_string();
+  if (candidate_or.has_error()) {
+    return absl::InvalidArgumentError(
+        "'candidate' field is not a string in signalling message: " +
+        boost::json::serialize(message));
+  }
+
+  // Libdatachannel will throw an exception if the candidate is invalid, so
+  // we need to catch it and return an error instead.
+  try {
+    return rtc::Candidate(candidate_or->c_str());
+  } catch (const std::exception& exc) {
+    return absl::InvalidArgumentError(
+        "Error parsing candidate from signalling message: " +
+        boost::json::serialize(message) + ". Exception: " + exc.what());
+  }
 }
 
 void WebRtcServer::RunLoop() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
@@ -360,14 +444,18 @@ std::shared_ptr<SignallingClient> WebRtcServer::InitSignallingClient(
     RtcConfig config = rtc_config_.value_or(RtcConfig());
     config.enable_ice_udp_mux = true;
     if (config.stun_servers.empty()) {
-      config.stun_servers.emplace_back("stun:actionengine.dev:3478");
+      config.stun_servers.emplace_back("stun:stun.l.google.com:19302");
     }
-    rtc::Configuration libdatachannel_config =
+    absl::StatusOr<rtc::Configuration> libdatachannel_config =
         config.BuildLibdatachannelConfig();
-    libdatachannel_config.bindAddress = address_;
+    if (!libdatachannel_config.ok()) {
+      abort_establishment_with_error(peer_id, libdatachannel_config.status());
+      return;
+    }
+    libdatachannel_config->bindAddress = address_;
 
-    auto connection =
-        std::make_unique<rtc::PeerConnection>(std::move(libdatachannel_config));
+    auto connection = std::make_unique<rtc::PeerConnection>(
+        *std::move(libdatachannel_config));
 
     rtc::PeerConnection* connection_ptr = connection.get();
 
@@ -441,33 +529,61 @@ std::shared_ptr<SignallingClient> WebRtcServer::InitSignallingClient(
               std::move(connection_from_map));
         });
 
-    FindOrDie(*connections, peer_id)
-        .connection->setRemoteDescription(*std::move(description));
+    const auto it = connections->find(peer_id);
+    if (it == connections->end()) {
+      abort_establishment_with_error(
+          peer_id,
+          absl::NotFoundError(absl::StrFormat(
+              "Connection with peer ID '%s' not found after insertion.",
+              peer_id)));
+      return;
+    }
+    try {
+      it->second.connection->setRemoteDescription(*std::move(description));
+    } catch (const std::exception& exc) {
+      abort_establishment_with_error(
+          peer_id, absl::InternalError(absl::StrFormat(
+                       "Error setting remote description: %s", exc.what())));
+    }
   });
 
-  signalling_client->OnCandidate(
-      [connections, abort_establishment_with_error, this](
-          std::string_view peer_id, const boost::json::value& message) {
-        {
-          act::MutexLock lock(&mu_);
-          if (!connections->contains(peer_id)) {
-            return;
-          }
-        }
+  signalling_client->OnCandidate([connections, abort_establishment_with_error,
+                                  this](std::string_view peer_id,
+                                        const boost::json::value& message) {
+    {
+      act::MutexLock lock(&mu_);
+      if (!connections->contains(peer_id)) {
+        DLOG(WARNING) << "Received candidate for unknown peer ID: " << peer_id;
+        return;
+      }
+    }
 
-        absl::StatusOr<rtc::Candidate> candidate =
-            ParseCandidateFromMessage(message);
-        if (!candidate.ok()) {
-          abort_establishment_with_error(peer_id, candidate.status());
-          return;
-        }
+    absl::StatusOr<rtc::Candidate> candidate =
+        ParseCandidateFromMessage(message);
+    if (!candidate.ok()) {
+      abort_establishment_with_error(peer_id, candidate.status());
+      return;
+    }
 
-        {
-          act::MutexLock lock(&mu_);
-          FindOrDie(*connections, peer_id)
-              .connection->addRemoteCandidate(*std::move(candidate));
-        }
-      });
+    {
+      act::MutexLock lock(&mu_);
+      const auto it = connections->find(peer_id);
+      if (it == connections->end()) {
+        abort_establishment_with_error(
+            peer_id, absl::NotFoundError(absl::StrFormat(
+                         "Connection with peer ID '%s' not found.", peer_id)));
+        return;
+      }
+      try {
+        DLOG(INFO) << "(server) Adding remote candidate: " << *candidate;
+        it->second.connection->addRemoteCandidate(*std::move(candidate));
+      } catch (const std::exception& exc) {
+        abort_establishment_with_error(
+            peer_id, absl::InternalError(absl::StrFormat(
+                         "Error adding remote candidate: %s", exc.what())));
+      }
+    }
+  });
 
   return signalling_client;
 }

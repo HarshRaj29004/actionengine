@@ -42,12 +42,23 @@ export class Session {
   }
 
   async dispatchMessage(message: WireMessage) {
+    const errors: string[] = [];
+    const promises: Promise<void>[] = [];
+
     for (const fragment of message.nodeFragments) {
       const node = await this.nodeMap.getNode(fragment.id);
       const isFinal =
         !fragment.continued || isNullChunk(fragment.data as Chunk);
-      node.put(fragment.data as Chunk, fragment.seq, isFinal).then();
+      const promise = node
+        .put(fragment.data as Chunk, fragment.seq, isFinal)
+        .catch((e) => {
+          errors.push(
+            `Error putting chunk seq ${fragment.seq} to node ${fragment.id}: ${e}`,
+          );
+        });
+      promises.push(promise);
     }
+
     for (const actionMessage of message.actions) {
       await this._mutex.runExclusive(() => {
         const action = fromActionMessage(
@@ -57,8 +68,20 @@ export class Session {
           this.stream,
           this,
         );
-        action.run().then();
+        const promise = action.run().catch((e) => {
+          errors.push(
+            `Error running action ${actionMessage.name} (${actionMessage.id}): ${e}`,
+          );
+        });
+        promises.push(promise);
       });
+    }
+    await Promise.all(promises);
+
+    if (errors.length > 0) {
+      const errorMessage =
+        'Errors during message dispatch:\n' + errors.join('\n');
+      throw new Error(errorMessage);
     }
   }
 

@@ -24,7 +24,7 @@ import { decodeWireMessage, encodeWireMessage } from './msgpack';
 const kRtcConfig: RTCConfiguration = {
   iceServers: [
     {
-      urls: 'stun:actionengine.dev:3478', // change to your STUN server
+      urls: 'stun:stun.l.google.com:19302', // change to your STUN server
     },
   ],
 };
@@ -250,10 +250,17 @@ class ChunkedMessage {
   private totalMessageSize: number;
   private totalChunksExpected: number;
 
+  private readonly mu: Mutex;
+  private readonly cv: CondVar;
+  private shouldStop: boolean;
+
   constructor() {
     this.chunkStore = new LocalChunkStore();
     this.totalMessageSize = 0;
     this.totalChunksExpected = -1;
+
+    this.mu = new Mutex();
+    this.cv = new CondVar();
   }
 
   async feedPacket(packet: WebRtcPacket): Promise<boolean> {
@@ -279,12 +286,25 @@ class ChunkedMessage {
         },
         true,
       );
+      await this.mu.runExclusive(async () => {
+        this.shouldStop = true;
+        this.cv.notifyAll();
+      });
       return true;
     }
 
     if (packet.type === WebRtcPacketType.WireMessageChunk) {
       if (this.totalChunksExpected === -1) {
-        throw new Error('Received a chunk while not processing a message');
+        await this.mu.runExclusive(async () => {
+          while (this.totalChunksExpected === -1 && !this.shouldStop) {
+            await this.cv.wait(this.mu);
+          }
+          if (this.shouldStop) {
+            throw new Error(
+              'Cannot feed chunked message: previous error occurred',
+            );
+          }
+        });
       }
       const chunk = packet as WebRtcWireMessageChunk;
       this.totalMessageSize += chunk.chunk.length;
@@ -301,13 +321,21 @@ class ChunkedMessage {
 
     if (packet.type === WebRtcPacketType.LengthSuffixedWireMessageChunk) {
       if (this.totalChunksExpected !== -1) {
+        await this.mu.runExclusive(async () => {
+          this.shouldStop = true;
+          this.cv.notifyAll();
+        });
         throw new Error(
           'Received a length-suffixed chunk while already processing a message',
         );
       }
+
       const chunk = packet as WebRtcLengthSuffixedWireMessageChunk;
-      this.totalMessageSize += chunk.chunk.length;
-      this.totalChunksExpected = chunk.length;
+      await this.mu.runExclusive(async () => {
+        this.totalMessageSize += chunk.chunk.length;
+        this.totalChunksExpected = chunk.length;
+      });
+
       await this.chunkStore.put(
         0,
         {
@@ -319,15 +347,31 @@ class ChunkedMessage {
       return (await this.chunkStore.size()) === this.totalChunksExpected;
     }
 
+    await this.mu.runExclusive(async () => {
+      this.shouldStop = true;
+      this.cv.notifyAll();
+    });
     throw new Error('Not implemented');
   }
 
   async consume(): Promise<Uint8Array<ArrayBuffer>> {
-    if ((await this.chunkStore.size()) < this.totalChunksExpected) {
+    if (
+      (await this.chunkStore.size()) < this.totalChunksExpected &&
+      this.totalChunksExpected !== -1
+    ) {
+      await this.mu.runExclusive(async () => {
+        this.shouldStop = true;
+        this.cv.notifyAll();
+      });
       throw new Error(
         `Not enough chunks to consume: expected ${this.totalChunksExpected}, got ${await this.chunkStore.size()}`,
       );
     }
+
+    await this.mu.runExclusive(async () => {
+      this.shouldStop = true;
+      this.cv.notifyAll();
+    });
 
     const chunks: Uint8Array<ArrayBuffer>[] = [];
     for (let i = 0; i < this.totalChunksExpected; i++) {
@@ -367,7 +411,7 @@ const setupDataChannel = (
       return;
     }
     const packet = parseWebRtcPacket(data);
-    await stream.feedWebRtcPacket(packet);
+    stream.feedWebRtcPacket(packet).then();
   };
 };
 

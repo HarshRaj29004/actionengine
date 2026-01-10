@@ -89,7 +89,7 @@ export const parseWebRtcParamsFromSearchParams = (
 
 export const useWebRtcStream = (identity: string, params: WebRtcParams) => {
   const [stream, setStream] = useState<WebRtcActionEngineStream | null>(null)
-  let cancelled = false
+  const [cancelled, setCancelled] = useState(false)
   const replaceStream = useCallback(
     async (identity: string, params: WebRtcParams) => {
       if (stream !== null) {
@@ -104,20 +104,20 @@ export const useWebRtcStream = (identity: string, params: WebRtcParams) => {
       )
 
       await newStream.waitUntilReady()
-      if (cancelled && newStream) {
+      if (cancelled) {
         await newStream.close()
         return
       }
 
       setStream(newStream)
     },
-    [stream, setStream],
+    [stream, cancelled],
   )
 
   useEffect(() => {
     replaceStream(identity, params).then()
     return () => {
-      cancelled = true
+      setCancelled(true)
     }
   }, [identity, params])
   return stream

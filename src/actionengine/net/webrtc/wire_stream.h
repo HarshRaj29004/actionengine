@@ -37,6 +37,7 @@
 #include "actionengine/concurrency/concurrency.h"
 #include "actionengine/data/types.h"
 #include "actionengine/net/stream.h"
+#include "actionengine/net/webrtc/signalling_client.h"
 #include "actionengine/stores/byte_chunking.h"
 
 namespace act::net {
@@ -65,14 +66,14 @@ struct RtcConfig {
   static constexpr int kDefaultMaxMessageSize =
       65536;  // 64 KiB to match the defaults of several browsers
 
-  [[nodiscard]] rtc::Configuration BuildLibdatachannelConfig() const;
+  absl::StatusOr<rtc::Configuration> BuildLibdatachannelConfig() const;
 
   std::optional<size_t> max_message_size = kDefaultMaxMessageSize;
 
   bool enable_ice_udp_mux = true;
 
   std::vector<std::string> stun_servers = {
-      "stun:actionengine.dev:3478",
+      "stun:stun.l.google.com:19302",
   };
   std::vector<TurnServer> turn_servers;
 };
@@ -82,12 +83,60 @@ struct WebRtcDataChannelConnection {
   std::shared_ptr<rtc::DataChannel> data_channel;
 };
 
+class EstablishmentState {
+ public:
+  absl::StatusOr<WebRtcDataChannelConnection> Wait(absl::Time deadline);
+
+  void ReportDoneWithStatus(absl::Status status);
+
+  ~EstablishmentState();
+
+  SignallingClient* absl_nullable signalling_client() const;
+
+  void set_signalling_client(
+      std::unique_ptr<SignallingClient> signalling_client);
+
+  rtc::PeerConnection* absl_nullable connection() const {
+    return connection_.get();
+  }
+
+  void set_connection(std::unique_ptr<rtc::PeerConnection> connection) {
+    connection_ = std::move(connection);
+  }
+
+  rtc::DataChannel* absl_nullable data_channel() const {
+    return data_channel_.get();
+  }
+
+  void set_data_channel(std::shared_ptr<rtc::DataChannel> data_channel) {
+    data_channel_ = std::move(data_channel);
+  }
+
+  bool should_send_candidates() const { return should_send_candidates_.load(); }
+
+  void set_should_send_candidates(bool value) {
+    should_send_candidates_.store(value);
+  }
+
+ private:
+  void EnsureNoCallbacks() const;
+
+  std::unique_ptr<SignallingClient> signalling_client_;
+  std::unique_ptr<rtc::PeerConnection> connection_;
+  std::shared_ptr<rtc::DataChannel> data_channel_;
+
+  absl::Status status_;
+  thread::PermanentEvent done_;
+
+  std::atomic<bool> should_send_candidates_ = true;
+};
+
 absl::StatusOr<WebRtcDataChannelConnection> StartWebRtcDataChannel(
     std::string_view identity, std::string_view peer_identity = "server",
     std::string_view signalling_address = "localhost",
     uint16_t signalling_port = 80,
     std::optional<RtcConfig> rtc_config = std::nullopt, bool use_ssl = false,
-    const absl::flat_hash_map<std::string, std::string>& headers = {});
+    const absl::flat_hash_map<std::string, std::string>& headers = {}) noexcept;
 
 /**
  * WebRtcWireStream is a concrete implementation of WireStream that
