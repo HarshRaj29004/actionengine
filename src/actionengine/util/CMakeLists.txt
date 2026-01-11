@@ -44,7 +44,7 @@ target_link_libraries(
         absl::inlined_vector
         absl::log
 )
-
+# --------------------------------------------------------------------------
 add_library(
         actUtilPybind11 STATIC
 )
@@ -66,6 +66,55 @@ target_link_libraries(
 )
 target_include_directories(
         actUtilPybind11 PUBLIC
+        ${ACTIONENGINE_PYBIND11_INCLUDE_DIRS}
+        ${ACTIONENGINE_PROJECT_TOP_LEVEL}
+        ${ACTIONENGINE_INCLUDE_DIR}
+        ${ACTIONENGINE_THIRD_PARTY_INCLUDE_DIRS}
+)
+# --------------------------------------------------------------------------
+add_library(
+        actUtilGlobalSettings STATIC
+        global_settings.cc
+        global_settings.h
+)
+add_library(
+        act::util::global_settings ALIAS
+        actUtilGlobalSettings
+)
+target_include_directories(
+        actUtilGlobalSettings PUBLIC
+        ${ACTIONENGINE_PROJECT_TOP_LEVEL}
+        ${ACTIONENGINE_INCLUDE_DIR}
+        ${ACTIONENGINE_THIRD_PARTY_INCLUDE_DIRS}
+)
+target_link_libraries(
+        actUtilGlobalSettings PRIVATE
+        absl::base
+        absl::log
+        absl::time
+)
+# --------------------------------------------------------------------------
+add_library(
+        actUtilGlobalSettingsPybind11 STATIC
+)
+add_library(
+        act::util::global_settings::pybind11 ALIAS
+        actUtilGlobalSettingsPybind11
+)
+target_sources(
+        actUtilGlobalSettingsPybind11 PRIVATE
+        global_settings_pybind11.cc
+)
+target_sources(
+        actUtilGlobalSettingsPybind11 PUBLIC
+        global_settings_pybind11.h
+)
+target_link_libraries(
+        actUtilGlobalSettingsPybind11 PRIVATE
+        ${ACTIONENGINE_PYBIND11_DEPENDENCIES}
+)
+target_include_directories(
+        actUtilGlobalSettingsPybind11 PUBLIC
         ${ACTIONENGINE_PYBIND11_INCLUDE_DIRS}
         ${ACTIONENGINE_PROJECT_TOP_LEVEL}
         ${ACTIONENGINE_INCLUDE_DIR}

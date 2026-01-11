@@ -261,7 +261,7 @@ inline auto AsyncNode::Next<NodeFragment>(std::optional<absl::Duration> timeout)
 
 template <typename T>
 absl::StatusOr<T> AsyncNode::ConsumeAs(std::optional<absl::Duration> timeout) {
-  timeout = timeout.value_or(GetReader().GetOptions().timeout);
+  timeout = timeout.value_or(GetReader().GetOptions().timeout_or_default());
   const absl::Time started_at = absl::Now();
 
   // The node being consumed must contain an element.

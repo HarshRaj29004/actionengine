@@ -33,6 +33,7 @@
 #include "actionengine/data/serialization.h"
 #include "actionengine/data/types.h"
 #include "actionengine/stores/chunk_store.h"
+#include "actionengine/util/global_settings.h"
 #include "actionengine/util/status_macros.h"
 
 namespace act {
@@ -43,21 +44,29 @@ struct ChunkStoreReaderOptions {
   /// If `false`, chunks will be read in the order they arrive in the store.
   /// This is useful for streaming data where the order of chunks is not
   /// important, such as parallel independent processing of chunks.
-  bool ordered = true;
+  std::optional<bool> ordered = std::nullopt;
+
+  [[nodiscard]] bool ordered_or_default() const;
 
   /// Whether to remove chunks from the store after reading them.
   /// If `false`, chunks will remain in the store after reading. This is useful
   /// if you want to read the same chunks multiple times or if you want to
   /// keep the chunks for later processing.
-  bool remove_chunks = true;
+  std::optional<bool> remove_chunks = std::nullopt;
+
+  [[nodiscard]] bool remove_chunks_or_default() const;
 
   /// The number of chunks to buffer in memory before the background fiber
   /// blocks on reading more chunks.
-  size_t n_chunks_to_buffer = 32;
+  std::optional<size_t> n_chunks_to_buffer = std::nullopt;
+
+  [[nodiscard]] size_t n_chunks_to_buffer_or_default() const;
 
   /// The timeout for reading chunks from the store, which applies to
   /// the Next() method.
-  absl::Duration timeout = absl::InfiniteDuration();
+  std::optional<absl::Duration> timeout = std::nullopt;
+
+  [[nodiscard]] absl::Duration timeout_or_default() const;
 
   size_t start_seq_or_offset = 0;
 };

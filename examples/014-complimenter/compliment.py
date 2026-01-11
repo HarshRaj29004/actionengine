@@ -78,7 +78,7 @@ async def main(args: argparse.Namespace):
 
 
 def sync_main(args: argparse.Namespace):
-    settings = actionengine.get_global_act_settings()
+    settings = actionengine.get_global_settings()
     settings.readers_deserialise_automatically = True
     settings.readers_timeout = 600
 

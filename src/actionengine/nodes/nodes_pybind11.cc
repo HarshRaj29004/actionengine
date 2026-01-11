@@ -160,22 +160,31 @@ void BindAsyncNode(py::handle scope, std::string_view name) {
           py::call_guard<py::gil_scoped_release>())
       .def(
           "set_reader_options",
-          [](const std::shared_ptr<AsyncNode>& self, bool ordered = false,
-             bool remove_chunks = false, int n_chunks_to_buffer = -1,
-             double timeout = -1.0, int start_seq_or_offset = -1) {
+          [](const std::shared_ptr<AsyncNode>& self,
+             std::optional<bool> ordered = std::nullopt,
+             std::optional<bool> remove_chunks = std::nullopt,
+             std::optional<int> n_chunks_to_buffer = std::nullopt,
+             std::optional<double> timeout = std::nullopt,
+             int start_seq_or_offset = -1) {
             ChunkStoreReaderOptions options;
             options.ordered = ordered;
             options.remove_chunks = remove_chunks;
             options.n_chunks_to_buffer = n_chunks_to_buffer;
             options.start_seq_or_offset = start_seq_or_offset;
-            options.timeout =
-                timeout < 0 ? absl::InfiniteDuration() : absl::Seconds(timeout);
+
+            std::optional<absl::Duration> timeout_duration = std::nullopt;
+            if (timeout.has_value()) {
+              timeout_duration = *timeout < 0 ? absl::InfiniteDuration()
+                                              : absl::Seconds(*timeout);
+            }
+            options.timeout = timeout_duration;
             self->SetReaderOptions(options);
             return self;
           },
-          py::arg_v("ordered", false), py::arg_v("remove_chunks", false),
-          py::arg_v("n_chunks_to_buffer", -1), py::arg_v("timeout", -1.0),
-          py::arg_v("start_seq_or_offset", 0),
+          py::arg_v("ordered", py::none()),
+          py::arg_v("remove_chunks", py::none()),
+          py::arg_v("n_chunks_to_buffer", py::none()),
+          py::arg_v("timeout", py::none()), py::arg_v("start_seq_or_offset", 0),
           py::call_guard<py::gil_scoped_release>())
       .def(
           "set_reader_options",

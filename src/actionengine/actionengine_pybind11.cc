@@ -31,6 +31,7 @@
 #include "actionengine/redis/chunk_store_pybind11.h"
 #include "actionengine/service/service_pybind11.h"
 #include "actionengine/stores/chunk_store_pybind11.h"
+#include "actionengine/util/global_settings_pybind11.h"
 #include "actionengine/util/utils_pybind11.h"
 
 namespace pybind11::detail {
@@ -63,6 +64,9 @@ PYBIND11_MODULE(_C, m) {
   py::module_ service = pybindings::MakeServiceModule(m, "service");
   py::module_ webrtc = pybindings::MakeWebRtcModule(m, "webrtc");
   py::module_ websockets = pybindings::MakeWebsocketsModule(m, "websockets");
+
+  pybindings::BindGlobalSettings(m, "GlobalSettings");
+  pybindings::BindGetGlobalSettingsFunction(m, "get_global_settings");
 
   m.def("run_threadsafe_if_coroutine", &pybindings::RunThreadsafeIfCoroutine,
         py::arg("function_call_result"), py::arg_v("loop", py::none()),

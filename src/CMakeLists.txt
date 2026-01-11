@@ -127,6 +127,8 @@ target_link_libraries(
         act::redis
         act::redis::pybind11
         act::util::pybind11
+        act::util::global_settings
+        act::util::global_settings::pybind11
         Python::Module
         Python::Python
         ${ACTIONENGINE_PYBIND11_DEPENDENCIES}

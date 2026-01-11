@@ -31,22 +31,33 @@
 
 namespace act {
 
-// struct StoreReaderPoolTask {
-//   int read_offset;
-//   ChunkStore* absl_nonnull chunk_store;
-//   bool pop = false;
-//   bool cancelled = false;
-//   absl::AnyInvocable<void(
-//       absl::StatusOr<std::optional<std::pair<int, Chunk>>> /*result*/,
-//       bool /*cancelled*/) &&>
-//       on_done;
-// };
-//
-// class StoreReaderFiberPool {
-//  public:
-//  private:
-//   thread::Channel<std::shared_ptr<StoreReaderPoolTask>> tasks_;
-// };
+bool ChunkStoreReaderOptions::ordered_or_default() const {
+  if (ordered) {
+    return *ordered;
+  }
+  return GetGlobalSettings().readers_read_in_order;
+}
+
+bool ChunkStoreReaderOptions::remove_chunks_or_default() const {
+  if (remove_chunks) {
+    return *remove_chunks;
+  }
+  return GetGlobalSettings().readers_remove_read_chunks;
+}
+
+size_t ChunkStoreReaderOptions::n_chunks_to_buffer_or_default() const {
+  if (n_chunks_to_buffer) {
+    return *n_chunks_to_buffer;
+  }
+  return GetGlobalSettings().readers_buffer_size;
+}
+
+absl::Duration ChunkStoreReaderOptions::timeout_or_default() const {
+  if (timeout) {
+    return *timeout;
+  }
+  return GetGlobalSettings().readers_timeout;
+}
 
 ChunkStoreReader::ChunkStoreReader(ChunkStore* absl_nonnull chunk_store,
                                    ChunkStoreReaderOptions options)
@@ -92,8 +103,9 @@ void ChunkStoreReader::SetOptions(const ChunkStoreReaderOptions& options) {
 absl::StatusOr<std::optional<Chunk>> ChunkStoreReader::Next(
     std::optional<absl::Duration> timeout) {
   act::MutexLock lock(&mu_);
-  ASSIGN_OR_RETURN(std::optional<Chunk> chunk,
-                   GetNextChunkFromBuffer(timeout.value_or(options_.timeout)));
+  ASSIGN_OR_RETURN(
+      std::optional<Chunk> chunk,
+      GetNextChunkFromBuffer(timeout.value_or(options_.timeout_or_default())));
   if (!chunk || chunk->IsNull()) {
     return std::nullopt;
   }
@@ -110,7 +122,8 @@ absl::StatusOr<std::optional<NodeFragment>> ChunkStoreReader::NextFragment(
     std::optional<absl::Duration> timeout) {
   act::MutexLock lock(&mu_);
   absl::StatusOr<std::optional<std::pair<int, Chunk>>> seq_and_chunk =
-      GetNextSeqAndChunkFromBuffer(timeout.value_or(options_.timeout));
+      GetNextSeqAndChunkFromBuffer(
+          timeout.value_or(options_.timeout_or_default()));
   RETURN_IF_ERROR(seq_and_chunk.status());
   ASSIGN_OR_RETURN(const int64_t final_seq, chunk_store_->GetFinalSeq());
   if (!seq_and_chunk->has_value()) {
@@ -132,7 +145,8 @@ template <>
 absl::StatusOr<std::optional<std::pair<int, Chunk>>> ChunkStoreReader::Next(
     std::optional<absl::Duration> timeout) {
   act::MutexLock lock(&mu_);
-  return GetNextSeqAndChunkFromBuffer(timeout.value_or(options_.timeout));
+  return GetNextSeqAndChunkFromBuffer(
+      timeout.value_or(options_.timeout_or_default()));
 }
 
 absl::StatusOr<std::optional<std::pair<int, Chunk>>>
@@ -234,7 +248,7 @@ absl::Status ChunkStoreReader::RunPrefetchLoop()
     Chunk next_chunk;
     int next_seq = -1;
 
-    if (options_.ordered) {
+    if (options_.ordered_or_default()) {
       mu_.unlock();
       auto chunk =
           chunk_store_->Get(total_chunks_read_, absl::InfiniteDuration());
@@ -266,7 +280,7 @@ absl::Status ChunkStoreReader::RunPrefetchLoop()
       }
     }
 
-    if (options_.remove_chunks && next_seq >= 0) {
+    if (options_.remove_chunks_or_default() && next_seq >= 0) {
       mu_.unlock();
       absl::Status pop_status = chunk_store_->Pop(next_seq).status();
       mu_.lock();
@@ -327,7 +341,7 @@ void ChunkStoreReader::EnsurePrefetchIsRunningOrHasCompleted()
 
   buffer_ =
       std::make_unique<thread::Channel<std::optional<std::pair<int, Chunk>>>>(
-          options_.n_chunks_to_buffer);
+          options_.n_chunks_to_buffer_or_default());
 
   status_ = absl::OkStatus();
   fiber_ = thread::NewTree({}, [this] {

@@ -28,6 +28,7 @@
 #include <pybind11/gil.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
+#include <pybind11/stl.h>
 #include <pybind11_abseil/absl_casters.h>
 #include <pybind11_abseil/status_caster.h>
 #include <pybind11_abseil/statusor_caster.h>
@@ -115,10 +116,37 @@ void BindChunkStoreReaderOptions(py::handle scope, std::string_view name) {
       .def(py::init([]() { return ChunkStoreReaderOptions{}; }),
            keep_event_loop_memo())
       .def_readwrite("ordered", &ChunkStoreReaderOptions::ordered)
+      .def("ordered_or_default", &ChunkStoreReaderOptions::ordered_or_default)
       .def_readwrite("remove_chunks", &ChunkStoreReaderOptions::remove_chunks)
+      .def("remove_chunks_or_default",
+           &ChunkStoreReaderOptions::remove_chunks_or_default)
       .def_readwrite("n_chunks_to_buffer",
                      &ChunkStoreReaderOptions::n_chunks_to_buffer)
-      .def_readwrite("timeout", &ChunkStoreReaderOptions::timeout)
+      .def("n_chunks_to_buffer_or_default",
+           &ChunkStoreReaderOptions::n_chunks_to_buffer_or_default)
+      .def_property(
+          "timeout",
+          [](const ChunkStoreReaderOptions& self) -> std::optional<double> {
+            if (self.timeout == absl::InfiniteDuration()) {
+              return -1.0;
+            }
+            if (self.timeout.has_value()) {
+              return absl::ToDoubleSeconds(*self.timeout);
+            }
+            return std::nullopt;
+          },
+          [](ChunkStoreReaderOptions& self, std::optional<double> timeout) {
+            if (!timeout.has_value()) {
+              self.timeout = std::nullopt;
+              return;
+            }
+            if (*timeout < 0) {
+              self.timeout = absl::InfiniteDuration();
+              return;
+            }
+            self.timeout = absl::Seconds(*timeout);
+          })
+      .def("timeout_or_default", &ChunkStoreReaderOptions::timeout_or_default)
       .def_readwrite("start_seq_or_offset",
                      &ChunkStoreReaderOptions::start_seq_or_offset)
       .doc() = "Options for reading from a ChunkStore.";

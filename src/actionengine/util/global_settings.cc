@@ -12,26 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef ACTIONENGINE_UTIL_GLOBAL_SETTINGS_H_
-#define ACTIONENGINE_UTIL_GLOBAL_SETTINGS_H_
-
-#include <cstdint>
-
-#include <absl/time/time.h>
+#include "actionengine/util/global_settings.h"
 
 namespace act {
 
-struct GlobalSettings {
-  bool readers_deserialise_automatically = true;
-  bool readers_read_in_order = true;
-  bool readers_remove_read_chunks = true;
-
-  int64_t readers_buffer_size = 32;
-  absl::Duration readers_timeout = absl::InfiniteDuration();
-};
-
-GlobalSettings& GetGlobalSettings();
+GlobalSettings& GetGlobalSettings() {
+  static auto* settings = new GlobalSettings();
+  return *settings;
+}
 
 }  // namespace act
-
-#endif  // ACTIONENGINE_UTIL_GLOBAL_SETTINGS_H_

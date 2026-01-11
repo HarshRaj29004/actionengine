@@ -23,6 +23,7 @@ target_link_libraries(
         act::concurrency
         act::data
         act::stores
+        act::util::global_settings
 )
 
 # ------------------------------------------------------------------
@@ -45,6 +46,8 @@ target_sources(
 target_link_libraries(
         actNodesPybind11 PRIVATE
         act::nodes
+        act::util::global_settings
+        act::util::global_settings::pybind11
         ${ACTIONENGINE_PYBIND11_DEPENDENCIES}
 )
 target_include_directories(

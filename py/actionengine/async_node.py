@@ -303,7 +303,7 @@ class AsyncNode(_C.nodes.AsyncNode):
         remove_chunks: bool | None = None,
         n_chunks_to_buffer: int | None = None,
         timeout: float | None = None,
-        start_seq_or_offset: int | None = None,
+        start_seq_or_offset: int = 0,
     ) -> "AsyncNode":
         """Sets the options for the default reader on the node.
 
@@ -314,17 +314,18 @@ class AsyncNode(_C.nodes.AsyncNode):
             internal ChunkStoreReader.
           timeout: The timeout for reading chunks, in seconds. If None, the default
             timeout is used, which is -1.0 (no timeout).
+          start_seq_or_offset: The sequence id or offset to start reading from.
 
         Returns:
           The node itself.
         """
 
         super().set_reader_options(
-            global_setting_if_none(ordered, "readers_read_in_order"),
-            global_setting_if_none(remove_chunks, "readers_remove_read_chunks"),
-            global_setting_if_none(n_chunks_to_buffer, "readers_buffer_size"),
-            global_setting_if_none(timeout, "readers_timeout"),
-            start_seq_or_offset or 0,
+            ordered,
+            remove_chunks,
+            n_chunks_to_buffer,
+            timeout,
+            start_seq_or_offset,
         )
         return self
 

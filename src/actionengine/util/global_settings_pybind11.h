@@ -12,26 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef ACTIONENGINE_UTIL_GLOBAL_SETTINGS_H_
-#define ACTIONENGINE_UTIL_GLOBAL_SETTINGS_H_
+#ifndef ACTIONENGINE_UTIL_GLOBAL_SETTINGS_PYBIND11_H_
+#define ACTIONENGINE_UTIL_GLOBAL_SETTINGS_PYBIND11_H_
 
-#include <cstdint>
+#include <pybind11/pybind11.h>
 
-#include <absl/time/time.h>
+namespace act::pybindings {
 
-namespace act {
+namespace py = ::pybind11;
 
-struct GlobalSettings {
-  bool readers_deserialise_automatically = true;
-  bool readers_read_in_order = true;
-  bool readers_remove_read_chunks = true;
+void BindGlobalSettings(py::handle scope,
+                        std::string_view name = "GlobalSettings");
 
-  int64_t readers_buffer_size = 32;
-  absl::Duration readers_timeout = absl::InfiniteDuration();
-};
+void BindGetGlobalSettingsFunction(
+    py::module scope, std::string_view function_name = "get_global_settings");
 
-GlobalSettings& GetGlobalSettings();
+}  // namespace act::pybindings
 
-}  // namespace act
-
-#endif  // ACTIONENGINE_UTIL_GLOBAL_SETTINGS_H_
+#endif  // ACTIONENGINE_UTIL_GLOBAL_SETTINGS_PYBIND11_H_

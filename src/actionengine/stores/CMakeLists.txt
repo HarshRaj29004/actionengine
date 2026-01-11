@@ -33,6 +33,7 @@ target_link_libraries(
         act::data
         act::net
         act::util
+        act::util::global_settings
 )
 
 # ------------------------------------------------------------------
