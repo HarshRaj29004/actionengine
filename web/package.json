@@ -17,6 +17,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "^2.10.2",
     "@ducanh2912/next-pwa": "^10.0.0",
     "@mediapipe/tasks-genai": "^0.10.25",
     "@msgpack/msgpack": "^3.1.2",
@@ -26,6 +27,7 @@
     "@tailwindcss/upgrade": "^4.1.13",
     "@wooorm/starry-night": "^3.8.0",
     "glsl-random": "^0.0.5",
+    "google-protobuf": "^4.0.1",
     "hast-util-to-html": "^9.0.5",
     "hast-util-to-jsx-runtime": "^2.3.6",
     "koota": "^0.5.1",
