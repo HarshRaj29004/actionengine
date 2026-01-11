@@ -40,7 +40,8 @@ AsyncNode::AsyncNode(std::string_view id, NodeMap* absl_nullable node_map,
   if (chunk_store_ == nullptr) {
     chunk_store_ = std::make_unique<LocalChunkStore>();
   }
-  chunk_store_->SetIdOrDie(id);
+  // TODO: figure out a way to propagate errors from constructors.
+  chunk_store_->SetId(id).IgnoreError();
 }
 
 AsyncNode::AsyncNode(AsyncNode&& other) noexcept {
@@ -105,8 +106,9 @@ absl::Status AsyncNode::PutInternal(NodeFragment fragment)
     }
   }
 
-  return PutInternal(std::move(fragment.GetChunkOrDie()),
-                     fragment.seq.value_or(-1), !fragment.continued);
+  ASSIGN_OR_RETURN(Chunk & chunk, fragment.GetChunk());
+  return PutInternal(std::move(chunk), fragment.seq.value_or(-1),
+                     !fragment.continued);
 }
 
 absl::Status AsyncNode::PutInternal(Chunk chunk, int seq, bool final)
@@ -139,13 +141,6 @@ absl::StatusOr<std::optional<Chunk>> AsyncNode::Next(
     std::optional<absl::Duration> timeout) {
   ChunkStoreReader& reader = GetReader();
   return reader.Next(timeout);
-}
-
-std::optional<Chunk> AsyncNode::NextOrDie(
-    std::optional<absl::Duration> timeout) {
-  auto next = Next(timeout);
-  CHECK_OK(next.status());
-  return *std::move(next);
 }
 
 ChunkStoreReader& AsyncNode::GetReader() ABSL_LOCKS_EXCLUDED(mu_) {

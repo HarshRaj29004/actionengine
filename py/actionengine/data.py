@@ -28,6 +28,7 @@ from pydantic import BaseModel
 # Simply reexport "data" classes
 ChunkMetadata = _C.data.ChunkMetadata
 Chunk = _C.data.Chunk
+NodeRef = _C.data.NodeRef
 NodeFragment = _C.data.NodeFragment
 Port = _C.data.Port
 ActionMessage = _C.data.ActionMessage

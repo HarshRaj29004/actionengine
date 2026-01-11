@@ -120,9 +120,17 @@ absl::Status ChunkStoreWriter::RunWriteLoop() {
       }
     }
 
+    absl::StatusOr<std::reference_wrapper<Chunk>> chunk_or_status =
+        next_fragment->GetChunk();
+    if (!chunk_or_status.ok()) {
+      mu_.lock();
+      status.Update(chunk_or_status.status());
+      break;
+    }
+
     status = chunk_store_->Put(/*seq=*/next_fragment->seq.value_or(-1),
                                /*chunk=*/
-                               std::move(next_fragment->GetChunkOrDie()),
+                               *std::move(chunk_or_status),
                                /*final=*/
                                !next_fragment->continued);
     mu_.lock();

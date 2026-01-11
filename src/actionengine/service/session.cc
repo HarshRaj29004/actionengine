@@ -44,13 +44,18 @@ ActionContext::~ActionContext() {
   act::MutexLock lock(&mu_);
 
   CancelContextInternal();
-
   WaitForActionsToDetachInternal();
 
-  CHECK(running_actions_.empty())
-      << "ActionContext::~ActionContext() timed out waiting for actions to "
-         "detach. Please make sure that all actions react to cancellation "
-         "and detach themselves from the context.";
+  if (!running_actions_.empty()) {
+    LOG(ERROR) << absl::StrFormat(
+        "ActionContext::~ActionContext() timed out waiting for %v actions to "
+        "detach. Please make sure that all actions react to cancellation and "
+        "detach themselves from the context.",
+        running_actions_.size());
+  }
+
+  // In debug builds, make it a fatal error if there are still running actions.
+  DCHECK(running_actions_.empty());
 }
 
 absl::Status ActionContext::Dispatch(std::shared_ptr<Action> action) {
@@ -253,14 +258,28 @@ absl::Status Session::DispatchMessage(WireMessage message,
     }
   }
 
-  for (auto& [action_id, action_name, inputs, outputs] : message.actions) {
+  for (auto& [action_id, action_name, inputs, outputs, headers] :
+       message.actions) {
     if (!action_registry_->IsRegistered(action_name)) {
-      status.Update(
-          absl::NotFoundError(absl::StrCat("Action not found: ", action_name)));
-      break;
+      std::string action_not_found_msg =
+          absl::StrCat("Action not found: ", action_name);
+      error_messages.push_back(action_not_found_msg);
+      status.Update(absl::NotFoundError(action_not_found_msg));
+      continue;
     }
-    auto action = action_registry_->MakeAction(
-        action_name, action_id, std::move(inputs), std::move(outputs));
+
+    absl::StatusOr<std::unique_ptr<Action>> action_or_status =
+        action_registry_->MakeAction(action_name, action_id, std::move(inputs),
+                                     std::move(outputs));
+    if (!action_or_status.ok()) {
+      error_messages.push_back(absl::StrCat("action ", action_name, " ",
+                                            action_id, ": ",
+                                            action_or_status.status()));
+      status.Update(action_or_status.status());
+      continue;
+    }
+
+    std::unique_ptr<Action> action = std::move(*action_or_status);
     action->BindNodeMap(node_map_);
     action->BindSession(this);
     action->BindStream(stream);

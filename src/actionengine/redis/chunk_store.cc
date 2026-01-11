@@ -52,11 +52,7 @@ ChunkStore::ChunkStore(std::shared_ptr<Redis> redis, std::string_view id,
                        absl::Duration ttl)
     : redis_(std::move(redis)), id_(id), stream_(redis_.get(), GetKey("s")) {
   if (ttl != absl::InfiniteDuration()) {
-    CHECK(ttl >= absl::Seconds(1))
-        << "TTL must not be less than one second, got: " << ttl;
     const auto ttl_whole_seconds = absl::Seconds(absl::ToInt64Seconds(ttl));
-    DCHECK(ttl_whole_seconds == ttl)
-        << "TTL must be a whole number of seconds, got: " << ttl;
     ttl_ = ttl_whole_seconds;
   }
 
@@ -267,7 +263,8 @@ absl::StatusOr<size_t> ChunkStore::Size() {
   const std::string offset_to_seq_key = GetKey("offset_to_seq");
   ASSIGN_OR_RETURN(Reply reply,
                    redis_->ExecuteCommand("ZCARD", {offset_to_seq_key}));
-  return ConvertToOrDie<int64_t>(std::move(reply));
+  ASSIGN_OR_RETURN(int64_t size, ConvertTo<int64_t>(std::move(reply)));
+  return size;
 }
 
 absl::StatusOr<bool> ChunkStore::Contains(int64_t seq) {
@@ -287,7 +284,10 @@ absl::StatusOr<bool> ChunkStore::Contains(int64_t seq) {
 }
 
 absl::Status ChunkStore::SetId(std::string_view id) {
-  CHECK(id == id_) << "Cannot change the ID of a ChunkStore.";
+  if (id != id_) {
+    return absl::FailedPreconditionError(
+        "Cannot change the ID of a ChunkStore.");
+  }
   return absl::OkStatus();
 }
 

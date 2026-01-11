@@ -575,7 +575,6 @@ std::shared_ptr<SignallingClient> WebRtcServer::InitSignallingClient(
         return;
       }
       try {
-        DLOG(INFO) << "(server) Adding remote candidate: " << *candidate;
         it->second.connection->addRemoteCandidate(*std::move(candidate));
       } catch (const std::exception& exc) {
         abort_establishment_with_error(

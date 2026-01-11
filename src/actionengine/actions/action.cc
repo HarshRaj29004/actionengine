@@ -36,7 +36,11 @@ Action::Action(ActionSchema schema, std::string_view id,
     : schema_(std::move(schema)),
       id_(id.empty() ? GenerateUUID4() : std::string(id)),
       cancelled_(std::make_unique<thread::PermanentEvent>()) {
-  ActionMessage message = schema_.GetActionMessage(id_);
+  absl::StatusOr<ActionMessage> message_or = schema_.GetActionMessage(id_);
+  DCHECK(message_or.ok())
+      << "Invariant violated: getting action message from a schema should only "
+         "NOT succeed if the id is empty.";
+  ActionMessage& message = *message_or;
 
   std::vector<Port>& input_parameters =
       inputs.empty() ? message.inputs : inputs;
@@ -263,7 +267,8 @@ absl::Status Action::Run() {
   absl::Status handler_status = handler_(shared_from_this());
   mu_.lock();
 
-  auto handler_status_chunk = ConvertToOrDie<Chunk>(handler_status);
+  ASSIGN_OR_RETURN(Chunk handler_status_chunk,
+                   ConvertTo<Chunk>(handler_status));
 
   // Propagate error statuses to all output nodes.
   if (!handler_status.ok()) {
@@ -415,7 +420,7 @@ ActionRegistry* absl_nullable Action::GetRegistry() const {
              : (session_ != nullptr ? session_->GetActionRegistry() : nullptr);
 }
 
-std::unique_ptr<Action> Action::MakeActionInSameSession(
+absl::StatusOr<std::unique_ptr<Action>> Action::MakeActionInSameSession(
     const std::string_view name, const std::string_view action_id) const {
   ActionRegistry* absl_nullable registry = GetRegistry();
   if (registry == nullptr) {
@@ -424,7 +429,7 @@ std::unique_ptr<Action> Action::MakeActionInSameSession(
   if (!registry->IsRegistered(name)) {
     return nullptr;
   }
-  auto action = registry->MakeAction(name, action_id);
+  ASSIGN_OR_RETURN(auto action, registry->MakeAction(name, action_id));
   act::MutexLock lock(&mu_);
   action->BindNodeMap(node_map_);
   action->BindStream(stream_);

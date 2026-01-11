@@ -92,31 +92,17 @@ class EstablishmentState {
   ~EstablishmentState();
 
   SignallingClient* absl_nullable signalling_client() const;
-
   void set_signalling_client(
       std::unique_ptr<SignallingClient> signalling_client);
 
-  rtc::PeerConnection* absl_nullable connection() const {
-    return connection_.get();
-  }
+  rtc::PeerConnection* absl_nullable connection() const;
+  void set_connection(std::unique_ptr<rtc::PeerConnection> connection);
 
-  void set_connection(std::unique_ptr<rtc::PeerConnection> connection) {
-    connection_ = std::move(connection);
-  }
+  rtc::DataChannel* absl_nullable data_channel() const;
+  void set_data_channel(std::shared_ptr<rtc::DataChannel> data_channel);
 
-  rtc::DataChannel* absl_nullable data_channel() const {
-    return data_channel_.get();
-  }
-
-  void set_data_channel(std::shared_ptr<rtc::DataChannel> data_channel) {
-    data_channel_ = std::move(data_channel);
-  }
-
-  bool should_send_candidates() const { return should_send_candidates_.load(); }
-
-  void set_should_send_candidates(bool value) {
-    should_send_candidates_.store(value);
-  }
+  bool should_send_candidates() const;
+  void set_should_send_candidates(bool value);
 
  private:
   void EnsureNoCallbacks() const;

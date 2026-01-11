@@ -251,18 +251,6 @@ class ChunkStore {
   virtual absl::StatusOr<int64_t> GetSeqForArrivalOffset(
       int64_t arrival_offset) = 0;
   virtual absl::StatusOr<int64_t> GetFinalSeq() = 0;
-
-  // You should not override these methods. They are provided for convenience
-  // and will call the StatusOr methods above, checking for errors and
-  // terminating if any occur.
-  virtual std::optional<Chunk> PopOrDie(int64_t seq) noexcept;
-  virtual void CloseWritesWithStatusOrDie(absl::Status status) noexcept;
-  [[nodiscard]] virtual size_t SizeOrDie() noexcept;
-  [[nodiscard]] virtual bool ContainsOrDie(int64_t seq) noexcept;
-  virtual void SetIdOrDie(std::string_view id) noexcept;
-  [[nodiscard]] virtual int64_t GetSeqForArrivalOffsetOrDie(
-      int64_t arrival_offset) noexcept;
-  [[nodiscard]] virtual int64_t GetFinalSeqOrDie() noexcept;
 };
 
 using ChunkStoreFactory =

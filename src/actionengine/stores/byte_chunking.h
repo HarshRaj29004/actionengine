@@ -98,9 +98,23 @@ class ChunkedBytes {
   absl::StatusOr<bool> FeedSerializedPacket(std::vector<Byte> data);
 
  private:
+  mutable act::Mutex mu_;
+
+  absl::StatusOr<bool> FeedPacketInternal(BytePacket packet)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  absl::StatusOr<bool> FeedSerializedPacketInternal(std::vector<Byte> data)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+
   LocalChunkStore chunk_store_;
-  size_t total_message_size_ = 0;
-  uint32_t total_expected_chunks_ = -1;
+  size_t total_message_size_ ABSL_GUARDED_BY(mu_) = 0;
+  uint32_t total_expected_chunks_ ABSL_GUARDED_BY(mu_) = -1;
+
+  // Holdout chunks received before total_expected_chunks_ is known. These are
+  // inserted into chunk_store_ once total_expected_chunks_ is set. The vector
+  // is inlined to avoid heap allocation for the common case of few holdout
+  // chunks.
+  absl::InlinedVector<std::pair<uint32_t, Chunk>, 4> holdout_chunks_
+      ABSL_GUARDED_BY(mu_);
 };
 
 }  // namespace act::data

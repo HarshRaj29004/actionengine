@@ -64,7 +64,9 @@ absl::StatusOr<MapReplyData> ParseHiredisMapReply(
       return absl::InvalidArgumentError(
           absl::StrCat("Expected key to be a string, got ", key.type));
     }
-    map_values.emplace(key.ConsumeStringContentOrDie(), std::move(value));
+    ASSIGN_OR_RETURN(std::string key_str,
+                     std::move(key).ConsumeStringContent());
+    map_values.emplace(std::move(key_str), std::move(value));
   }
 
   if (free) {

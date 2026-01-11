@@ -67,25 +67,6 @@ absl::Status RunSimpleSession(std::shared_ptr<WireStream> stream,
   return status;
 }
 
-std::unique_ptr<Action> MakeActionInConnection(
-    const StreamToSessionConnection& connection,
-    const std::string_view action_name, const std::string_view action_id) {
-
-  if (connection.session == nullptr) {
-    return nullptr;
-  }
-  if (connection.session->GetActionRegistry() == nullptr) {
-    return nullptr;
-  }
-
-  auto action = connection.session->GetActionRegistry()->MakeAction(action_name,
-                                                                    action_id);
-  action->BindNodeMap(connection.session->GetNodeMap());
-  action->BindStream(connection.stream.get());
-  action->BindSession(connection.session);
-  return action;
-}
-
 Service::Service(ActionRegistry* absl_nullable action_registry,
                  ConnectionHandler connection_handler,
                  ChunkStoreFactory chunk_store_factory)
@@ -170,13 +151,14 @@ Service::EstablishConnection(std::shared_ptr<WireStream>&& stream,
 
   streams_per_session_[session_id].insert(stream_id);
 
-  connections_[stream_id] =
+  auto connection =
       std::make_shared<StreamToSessionConnection>(StreamToSessionConnection{
           .stream = streams_.at(stream_id),
           .session = sessions_.at(session_id).get(),
           .session_id = session_id,
           .stream_id = stream_id,
       });
+  connections_[stream_id] = connection;
 
   ConnectionHandler resolved_handler = std::move(connection_handler);
   if (resolved_handler == nullptr) {
@@ -190,7 +172,6 @@ Service::EstablishConnection(std::shared_ptr<WireStream>&& stream,
 
   // for later: Stubby streams require Accept() to be called before returning
   // from StartSession. This might not be the ideal solution with other streams.
-  auto& connection = act::FindOrDie(connections_, stream_id);
   if (absl::Status status = connection->stream->Accept(); !status.ok()) {
     CleanupConnection(*connection);
     return status;

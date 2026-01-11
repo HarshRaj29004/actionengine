@@ -18,6 +18,7 @@
 #include <absl/container/flat_hash_map.h>
 
 namespace act {
+
 template <typename RecordKey, typename Value, typename QueryKey>
 Value& FindOrDie(absl::flat_hash_map<RecordKey, Value>& map,
                  const QueryKey& key) {
@@ -33,6 +34,27 @@ const Value& FindOrDie(const absl::flat_hash_map<RecordKey, Value>& map,
   CHECK(it != map.end());
   return it->second;
 }
+
+template <typename RecordKey, typename Value, typename QueryKey>
+absl::StatusOr<std::reference_wrapper<Value>> FindValue(
+    absl::flat_hash_map<RecordKey, Value>& map, const QueryKey& key) {
+  auto it = map.find(key);
+  if (it == map.end()) {
+    return absl::NotFoundError("Key not found in map.");
+  }
+  return it->second;
+}
+
+template <typename RecordKey, typename Value, typename QueryKey>
+absl::StatusOr<std::reference_wrapper<const Value>> FindValue(
+    const absl::flat_hash_map<RecordKey, Value>& map, const QueryKey& key) {
+  const auto it = map.find(key);
+  if (it == map.end()) {
+    return absl::NotFoundError("Key not found in map.");
+  }
+  return it->second;
+}
+
 }  // namespace act
 
 #endif  // ACTIONENGINE_UTIL_MAP_UTIL_H_

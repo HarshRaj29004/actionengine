@@ -134,7 +134,7 @@ struct Reply;
 
 struct ArrayReplyData {
   [[nodiscard]] std::vector<Reply> Consume();
-  [[nodiscard]] absl::flat_hash_map<std::string, Reply> ConsumeAsMapOrDie();
+  absl::StatusOr<absl::flat_hash_map<std::string, Reply>> ConsumeAsMap();
 
   std::vector<Reply> values;
 };
@@ -161,31 +161,13 @@ struct Reply {
   // Reply() = default;
   // ~Reply() = default;
 
-  std::string ConsumeStringContentOrDie();
-  std::vector<Reply> ConsumeAsArrayOrDie();
-  absl::flat_hash_map<std::string, Reply> ConsumeAsMapOrDie();
+  absl::StatusOr<std::string> ConsumeStringContent();
+  absl::StatusOr<std::vector<Reply>> ConsumeAsArray();
+  absl::StatusOr<absl::flat_hash_map<std::string, Reply>> ConsumeAsMap();
 
   absl::StatusOr<bool> ToBool() const;
   absl::StatusOr<double> ToDouble() const;
   absl::StatusOr<int64_t> ToInt() const;
-
-  [[nodiscard]] bool ToBoolOrDie() const {
-    auto status_or_value = ToBool();
-    CHECK_OK(status_or_value);
-    return *status_or_value;
-  }
-
-  [[nodiscard]] double ToDoubleOrDie() const {
-    auto status_or_value = ToDouble();
-    CHECK_OK(status_or_value);
-    return *status_or_value;
-  }
-
-  int64_t ToIntOrDie() const {
-    auto status_or_value = ToInt();
-    CHECK_OK(status_or_value);
-    return *status_or_value;
-  }
 
   [[nodiscard]] bool IsString() const {
     return type == ReplyType::String &&

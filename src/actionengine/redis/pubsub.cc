@@ -20,6 +20,8 @@ Subscription::Subscription(size_t capacity) : channel_(capacity) {}
 
 Subscription::Subscription(absl::AnyInvocable<void(Reply)> on_message)
     : channel_(1), on_message_(std::move(on_message)) {
+  // Crash OK: it is a programming error to create a Subscription with a
+  // callback that's null.
   CHECK(on_message_)
       << "on_message must be set for Subscription with a callback";
   CloseWriter();

@@ -176,15 +176,22 @@ void BindActionRegistry(py::handle scope, std::string_view name) {
                 name, def, MakeStatusAwareActionHandler(std::move(handler)));
           },
           py::arg("name"), py::arg("definition"), py::arg("handler"))
-      .def("make_action_message", &ActionRegistry::MakeActionMessage,
-           py::arg("name"), py::arg("action_id"),
-           py::call_guard<py::gil_scoped_release>())
+      .def(
+          "make_action_message",
+          [](const std::shared_ptr<ActionRegistry>& self, std::string_view name,
+             std::string_view action_id) -> absl::StatusOr<ActionMessage> {
+            return self->MakeActionMessage(name, action_id);
+          },
+          py::arg("name"), py::arg("action_id"),
+          py::call_guard<py::gil_scoped_release>())
       .def(
           "make_action",
           [](const std::shared_ptr<ActionRegistry>& self, std::string_view name,
              std::string_view id, NodeMap* node_map,
-             const std::shared_ptr<WireStream>& stream, Session* session) {
-            auto action = self->MakeAction(name, id);
+             const std::shared_ptr<WireStream>& stream,
+             Session* session) -> absl::StatusOr<std::shared_ptr<Action>> {
+            ASSIGN_OR_RETURN(std::unique_ptr<Action> action,
+                             self->MakeAction(name, id));
             action->BindNodeMap(node_map);
             action->BindStream(stream.get());
             action->BindSession(session);
@@ -207,15 +214,12 @@ void BindActionRegistry(py::handle scope, std::string_view name) {
           [](const std::shared_ptr<ActionRegistry>& self,
              std::string_view action_name)
               -> absl::StatusOr<std::shared_ptr<const ActionSchema>> {
-            RETURN_IF_ERROR(
-                self->IsRegistered(action_name)
-                    ? absl::OkStatus()
-                    : absl::NotFoundError(absl::StrCat("Action not found: '",
-                                                       action_name, "'")));
+            ASSIGN_OR_RETURN(const ActionSchema& schema,
+                             self->GetSchema(action_name));
             return std::shared_ptr<const ActionSchema>(
-                &self->GetSchema(action_name), [](const ActionSchema*) {});
+                &schema, [](const ActionSchema*) {});
           },
-          py::arg("name"))
+          py::arg("name"), py::return_value_policy::reference)
       .def("list_registered_actions",
            [](const std::shared_ptr<ActionRegistry>& self) {
              return self->ListRegisteredActions();
@@ -310,8 +314,8 @@ void BindAction(py::handle scope, std::string_view name) {
       .def(
           "make_action_in_same_session",
           [](const std::shared_ptr<Action>& action, std::string_view name,
-             std::string_view id) {
-            return std::shared_ptr(action->MakeActionInSameSession(name, id));
+             std::string_view id) -> absl::StatusOr<std::unique_ptr<Action>> {
+            return action->MakeActionInSameSession(name, id);
           },
           py::arg("name"), py::arg_v("action_id", ""),
           py::call_guard<py::gil_scoped_release>())

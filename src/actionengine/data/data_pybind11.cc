@@ -114,10 +114,11 @@ absl::StatusOr<Chunk> PyToChunk(py::handle obj, std::string_view mimetype,
     py::gil_scoped_release release;
     serialized_chunk = ToChunk(std::any(obj), mimetype_str, registry);
     if (!serialized_chunk.ok()) {
+      ASSIGN_OR_RETURN(std::any args_as_any,
+                       ConvertTo<std::any>(pybindings::PySerializationArgs{
+                           .object = obj, .mimetype = mimetype_str}));
       serialized_chunk =
-          ToChunk(ConvertToOrDie<std::any>(pybindings::PySerializationArgs{
-                      .object = obj, .mimetype = mimetype_str}),
-                  mimetype_str, registry);
+          ToChunk(std::move(args_as_any), mimetype_str, registry);
     }
   }
 
@@ -229,6 +230,27 @@ void BindChunk(py::handle scope, std::string_view name) {
       "the data themselves.";
 }
 
+void BindNodeRef(py::handle scope, std::string_view name) {
+  py::class_<NodeRef>(scope, std::string(name).c_str())
+      .def(py::init<>())
+      .def(py::init([](std::string_view id, uint32_t offset,
+                       std::optional<uint32_t> length) {
+             return NodeRef{
+                 .id = std::string(id),
+                 .offset = offset,
+                 .length = length,
+             };
+           }),
+           py::kw_only(), py::arg_v("id", ""), py::arg_v("offset", 0),
+           py::arg("length") = std::nullopt)
+      .def_readwrite("id", &NodeRef::id)
+      .def_readwrite("offset", &NodeRef::offset)
+      .def_readwrite("length", &NodeRef::length)
+      .def("__repr__",
+           [](const NodeRef& node_ref) { return absl::StrCat(node_ref); })
+      .doc() = "An ActionEngine NodeRef referencing a span of a node.";
+}
+
 void BindNodeFragment(py::handle scope, std::string_view name) {
   py::class_<NodeFragment>(scope, std::string(name).c_str())
       .def(py::init<>())
@@ -243,11 +265,21 @@ void BindNodeFragment(py::handle scope, std::string_view name) {
       .def_readwrite("id", &NodeFragment::id)
       .def_property(
           "chunk",
-          [](NodeFragment& fragment) -> Chunk& {
-            return std::get<Chunk>(fragment.data);
+          [](NodeFragment& fragment)
+              -> absl::StatusOr<std::reference_wrapper<Chunk>> {
+            return fragment.GetChunk();
           },
           [](NodeFragment& fragment, const Chunk& chunk) {
             fragment.data = chunk;
+          })
+      .def_property(
+          "node_ref",
+          [](NodeFragment& fragment)
+              -> absl::StatusOr<std::reference_wrapper<NodeRef>> {
+            return fragment.GetNodeRef();
+          },
+          [](NodeFragment& fragment, const NodeRef& node_ref) {
+            fragment.data = node_ref;
           })
       .def_readwrite("seq", &NodeFragment::seq)
       .def_readwrite("continued", &NodeFragment::continued)
@@ -460,6 +492,7 @@ py::module_ MakeDataModule(py::module_ scope, std::string_view module_name) {
 
   BindChunkMetadata(data, "ChunkMetadata");
   BindChunk(data, "Chunk");
+  BindNodeRef(data, "NodeRef");
   BindNodeFragment(data, "NodeFragment");
   BindPort(data, "Port");
   BindActionMessage(data, "ActionMessage");

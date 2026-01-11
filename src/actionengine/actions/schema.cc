@@ -20,28 +20,32 @@
 
 namespace act {
 
-ActionMessage ActionSchema::GetActionMessage(std::string_view action_id) const {
-  CHECK(!action_id.empty()) << "Action ID cannot be empty to create a message";
+absl::StatusOr<ActionMessage> ActionSchema::GetActionMessage(
+    std::string_view action_id) const {
+  if (action_id.empty()) {
+    return absl::InvalidArgumentError(
+        "Action ID cannot be empty to create a message");
+  }
 
   std::vector<Port> input_parameters;
   input_parameters.reserve(inputs.size());
-  for (const auto& [name, _] : inputs) {
+  for (const auto& [input_name, _] : inputs) {
     input_parameters.push_back(Port{
-        .name = name,
-        .id = absl::StrCat(action_id, "#", name),
+        .name = input_name,
+        .id = absl::StrCat(action_id, "#", input_name),
     });
   }
 
   std::vector<Port> output_parameters;
   output_parameters.reserve(outputs.size());
-  for (const auto& [name, _] : outputs) {
+  for (const auto& [output_name, _] : outputs) {
     output_parameters.push_back(Port{
-        .name = name,
-        .id = absl::StrCat(action_id, "#", name),
+        .name = output_name,
+        .id = absl::StrCat(action_id, "#", output_name),
     });
   }
 
-  return {
+  return ActionMessage{
       .id = std::string(action_id),
       .name = name,
       .inputs = input_parameters,

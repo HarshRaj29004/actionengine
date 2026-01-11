@@ -98,8 +98,8 @@ class ActionRegistry {
    * @return
    *   An ActionMessage representing the action with the given name and ID.
    */
-  [[nodiscard]] ActionMessage MakeActionMessage(std::string_view name,
-                                                std::string_view id) const;
+  absl::StatusOr<ActionMessage> MakeActionMessage(std::string_view name,
+                                                  std::string_view id) const;
 
   /** @brief
    *    Creates an action instance based on the registered schema and handler.
@@ -122,44 +122,33 @@ class ActionRegistry {
    * @return
    *   An owning pointer to the newly created Action instance.
    */
-  [[nodiscard]] std::unique_ptr<Action> MakeAction(
+  absl::StatusOr<std::unique_ptr<Action>> MakeAction(
       std::string_view name, std::string_view action_id = "",
       std::vector<Port> inputs = {}, std::vector<Port> outputs = {});
 
   /** @brief
    *    Gets the schema of the action with the given name.
    *
-   * Note: TERMINATES if the action is not registered, so you must use
-   * IsRegistered() before calling this method to ensure the action exists.
-   *
    * @param name
    *   The name of the action whose schema is requested.
    * @return
    *   The ActionSchema of the action with the given name.
    */
-  [[nodiscard]] const ActionSchema& GetSchema(std::string_view name) const;
+  absl::StatusOr<std::reference_wrapper<const ActionSchema>> GetSchema(
+      std::string_view name) const;
 
   /** @brief
    *    Gets the handler of the action with the given name.
-   *
-   * Note: TERMINATES if the action is not registered, so you must use
-   * IsRegistered() before calling this method to ensure the action exists.
    *
    * @param name
    *   The name of the action whose handler is requested.
    * @return
    *   The ActionHandler of the action with the given name.
    */
-  [[nodiscard]] const ActionHandler& GetHandler(std::string_view name) const;
+  absl::StatusOr<std::reference_wrapper<const ActionHandler>> GetHandler(
+      std::string_view name) const;
 
-  [[nodiscard]] std::vector<std::string> ListRegisteredActions() const {
-    std::vector<std::string> names;
-    names.reserve(schemas_.size());
-    for (const auto& [name, _] : schemas_) {
-      names.push_back(name);
-    }
-    return names;
-  }
+  [[nodiscard]] std::vector<std::string> ListRegisteredActions() const;
 
   absl::flat_hash_map<std::string, ActionSchema> schemas_;
   absl::flat_hash_map<std::string, ActionHandler> handlers_;

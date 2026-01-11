@@ -78,7 +78,7 @@ struct ActionSchema {
    * @return
    *   An ActionMessage representing the action with the given ID.
    */
-  [[nodiscard]] ActionMessage GetActionMessage(
+  absl::StatusOr<ActionMessage> GetActionMessage(
       std::string_view action_id) const;
 
   /** The action's name that is used to register it in the ActionRegistry. */

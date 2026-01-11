@@ -82,9 +82,11 @@ void ChunkStoreReader::Cancel() const {
 
 void ChunkStoreReader::SetOptions(const ChunkStoreReaderOptions& options) {
   act::MutexLock lock(&mu_);
-  CHECK(fiber_ == nullptr)
-      << "Cannot set options after the reader has been started.";
   options_ = options;
+  if (fiber_ != nullptr) {
+    LOG(WARNING) << "Reader options changed while prefetching is in progress. "
+                    "Reader state is very likely inconsistent.";
+  }
 }
 
 absl::StatusOr<std::optional<Chunk>> ChunkStoreReader::Next(

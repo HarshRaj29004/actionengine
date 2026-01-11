@@ -41,6 +41,7 @@
 #include "actionengine/data/conversion.h"
 #include "actionengine/redis/pubsub.h"
 #include "actionengine/redis/reply.h"
+#include "actionengine/redis/reply_converters.h"
 #include "actionengine/util/status_macros.h"
 
 namespace act::redis {
@@ -235,6 +236,8 @@ class Redis {
 
   void OnPushReply(redisReply* absl_nonnull hiredis_reply)
       ABSL_LOCKS_EXCLUDED(mu_);
+
+  void OnFailedConversion(absl::Status status);
 
   mutable act::Mutex mu_;
   act::CondVar cv_ ABSL_GUARDED_BY(mu_);

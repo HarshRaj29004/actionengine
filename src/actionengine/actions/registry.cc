@@ -42,7 +42,7 @@ ActionRegistry::ActionRegistry() {
              for (const auto& name : ListRegisteredActions()) {
                boost::json::object schema_obj;
                schema_obj["name"] = boost::json::string(name);
-               const ActionSchema& schema = GetSchema(name);
+               ASSIGN_OR_RETURN(const ActionSchema& schema, GetSchema(name));
 
                boost::json::array inputs_obj;
                for (const auto& [input_name, input_type] : schema.inputs) {
@@ -86,31 +86,47 @@ bool ActionRegistry::IsRegistered(std::string_view name) const {
   return schemas_.contains(name) && handlers_.contains(name);
 }
 
-ActionMessage ActionRegistry::MakeActionMessage(std::string_view name,
-                                                std::string_view id) const {
-  return act::FindOrDie(schemas_, name).GetActionMessage(id);
+absl::StatusOr<ActionMessage> ActionRegistry::MakeActionMessage(
+    std::string_view name, std::string_view id) const {
+  ASSIGN_OR_RETURN(const ActionSchema& schema, act::FindValue(schemas_, name));
+  return schema.GetActionMessage(id);
 }
 
-std::unique_ptr<Action> ActionRegistry::MakeAction(std::string_view name,
-                                                   std::string_view action_id,
-                                                   std::vector<Port> inputs,
-                                                   std::vector<Port> outputs) {
+absl::StatusOr<std::unique_ptr<Action>> ActionRegistry::MakeAction(
+    std::string_view name, std::string_view action_id, std::vector<Port> inputs,
+    std::vector<Port> outputs) {
 
-  auto action =
-      std::make_unique<Action>(act::FindOrDie(schemas_, name), action_id,
-                               std::move(inputs), std::move(outputs));
-  action->BindHandler(act::FindOrDie(handlers_, name));
+  ASSIGN_OR_RETURN(const ActionSchema& schema, GetSchema(name));
+  ASSIGN_OR_RETURN(const ActionHandler& handler, GetHandler(name));
+
+  auto action = std::make_unique<Action>(schema, action_id, std::move(inputs),
+                                         std::move(outputs));
+  action->BindHandler(handler);
   action->BindRegistry(this);
 
   return action;
 }
 
-const ActionSchema& ActionRegistry::GetSchema(std::string_view name) const {
-  return act::FindOrDie(schemas_, name);
+absl::StatusOr<std::reference_wrapper<const ActionSchema>>
+ActionRegistry::GetSchema(std::string_view name) const {
+  ASSIGN_OR_RETURN(const ActionSchema& schema, act::FindValue(schemas_, name));
+  return schema;
 }
 
-const ActionHandler& ActionRegistry::GetHandler(std::string_view name) const {
-  return act::FindOrDie(handlers_, name);
+absl::StatusOr<std::reference_wrapper<const ActionHandler>>
+ActionRegistry::GetHandler(std::string_view name) const {
+  ASSIGN_OR_RETURN(const ActionHandler& handler,
+                   act::FindValue(handlers_, name));
+  return handler;
+}
+
+std::vector<std::string> ActionRegistry::ListRegisteredActions() const {
+  std::vector<std::string> names;
+  names.reserve(schemas_.size());
+  for (const auto& [name, _] : schemas_) {
+    names.push_back(name);
+  }
+  return names;
 }
 
 }  // namespace act

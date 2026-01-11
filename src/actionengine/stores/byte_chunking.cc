@@ -25,6 +25,7 @@
 #include <absl/time/time.h>
 
 #include "actionengine/data/types.h"
+#include "actionengine/util/status_macros.h"
 #include "cppack/msgpack.h"
 
 namespace act::data {
@@ -229,7 +230,10 @@ std::vector<Byte> SerializeBytePacket(BytePacket packet) {
 }
 
 absl::StatusOr<std::vector<Byte>> ChunkedBytes::ConsumeCompleteBytes() {
-  if (chunk_store_.SizeOrDie() < total_expected_chunks_) {
+  act::MutexLock lock(&mu_);
+
+  ASSIGN_OR_RETURN(const size_t size, chunk_store_.Size());
+  if (size < total_expected_chunks_) {
     return absl::FailedPreconditionError(
         "Cannot consume message, not all chunks received yet");
   }
@@ -237,21 +241,32 @@ absl::StatusOr<std::vector<Byte>> ChunkedBytes::ConsumeCompleteBytes() {
   std::vector<Byte> message_data;
   message_data.reserve(total_message_size_);
 
-  for (int i = 0; i < total_expected_chunks_; ++i) {
-    absl::StatusOr<Chunk> chunk = chunk_store_.Get(i, absl::ZeroDuration());
+  const uint32_t total_expected_chunks = total_expected_chunks_;
+
+  mu_.unlock();
+  for (int i = 0; i < total_expected_chunks; ++i) {
+    absl::StatusOr<Chunk> chunk =
+        chunk_store_.Get(i, /*timeout=*/absl::ZeroDuration());
     if (!chunk.ok()) {
       return chunk.status();
     }
     message_data.insert(message_data.end(), chunk->data.begin(),
                         chunk->data.end());
   }
+  mu_.lock();
 
   return message_data;
 }
 
 absl::StatusOr<bool> ChunkedBytes::FeedPacket(BytePacket packet) {
-  if (chunk_store_.SizeOrDie() >= total_expected_chunks_ &&
-      total_expected_chunks_ != -1) {
+  act::MutexLock lock(&mu_);
+  return FeedPacketInternal(std::move(packet));
+}
+
+absl::StatusOr<bool> ChunkedBytes::FeedPacketInternal(BytePacket packet)
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+  ASSIGN_OR_RETURN(const size_t size, chunk_store_.Size());
+  if (size >= total_expected_chunks_ && total_expected_chunks_ != -1) {
     return absl::FailedPreconditionError(
         "Cannot feed more packets, already received all expected chunks");
   }
@@ -278,13 +293,22 @@ absl::StatusOr<bool> ChunkedBytes::FeedPacket(BytePacket packet) {
         .metadata = std::nullopt,
         .data = std::string(std::make_move_iterator(chunk.chunk.begin()),
                             std::make_move_iterator(chunk.chunk.end()))};
+
+    // If total_expected_chunks_ is not known yet, hold out this chunk.
+    if (total_expected_chunks_ == -1) {
+      holdout_chunks_.push_back(std::pair(chunk.seq, std::move(data_chunk)));
+      return false;
+    }
+
     total_message_size_ += data_chunk.data.size();
     chunk_store_
         .Put(static_cast<int>(chunk.seq), std::move(data_chunk),
              /*final=*/
              chunk.seq == total_expected_chunks_ - 1)
         .IgnoreError();
-    return chunk_store_.SizeOrDie() == total_expected_chunks_;
+
+    ASSIGN_OR_RETURN(const size_t current_size, chunk_store_.Size());
+    return current_size == total_expected_chunks_;
   }
 
   if (std::holds_alternative<LengthSuffixedByteChunkPacket>(packet)) {
@@ -294,9 +318,22 @@ absl::StatusOr<bool> ChunkedBytes::FeedPacket(BytePacket packet) {
           "Cannot have more than one WebRtcLengthSuffixedWireMessageChunk "
           "in a sequence");
     }
-    total_message_size_ += chunk.chunk.size();
     total_expected_chunks_ =
         chunk.length;  // Set the total expected chunks from this packet.
+
+    // Feed any holdout chunks received before total_expected_chunks_ was known.
+    for (auto& [holdout_seq, holdout_data_chunk] : holdout_chunks_) {
+      total_message_size_ += holdout_data_chunk.data.size();
+      chunk_store_
+          .Put(static_cast<int>(holdout_seq), std::move(holdout_data_chunk),
+               /*final=*/
+               holdout_seq == total_expected_chunks_ - 1)
+          .IgnoreError();
+    }
+    holdout_chunks_.clear();
+
+    // Feed this new chunk.
+    total_message_size_ += chunk.chunk.size();
     chunk_store_
         .Put(static_cast<int>(chunk.seq),
              Chunk{.metadata = std::nullopt,
@@ -306,7 +343,9 @@ absl::StatusOr<bool> ChunkedBytes::FeedPacket(BytePacket packet) {
              /*final=*/
              chunk.seq == total_expected_chunks_ - 1)
         .IgnoreError();
-    return chunk_store_.SizeOrDie() == total_expected_chunks_;
+
+    ASSIGN_OR_RETURN(const size_t current_size, chunk_store_.Size());
+    return current_size == total_expected_chunks_;
   }
 
   return absl::InvalidArgumentError("Unknown WebRtcActionEnginePacket type");
@@ -314,13 +353,21 @@ absl::StatusOr<bool> ChunkedBytes::FeedPacket(BytePacket packet) {
 
 absl::StatusOr<bool> ChunkedBytes::FeedSerializedPacket(
     std::vector<Byte> data) {
-  if (chunk_store_.SizeOrDie() >= total_expected_chunks_ &&
-      total_expected_chunks_ != -1) {
+  act::MutexLock lock(&mu_);
+  return FeedSerializedPacketInternal(std::move(data));
+}
+
+absl::StatusOr<bool> ChunkedBytes::FeedSerializedPacketInternal(
+    std::vector<Byte> data) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+  ASSIGN_OR_RETURN(const size_t size, chunk_store_.Size());
+  if (size >= total_expected_chunks_ && total_expected_chunks_ != -1) {
     return absl::FailedPreconditionError(
         "Cannot feed more packets, already received all expected chunks");
   }
 
+  mu_.unlock();
   absl::StatusOr<BytePacket> packet = ParseBytePacket(data.data(), data.size());
+  mu_.lock();
   if (!packet.ok()) {
     return packet.status();
   }

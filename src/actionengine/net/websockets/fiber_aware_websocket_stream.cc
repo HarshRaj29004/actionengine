@@ -26,7 +26,7 @@
 
 namespace act::net {
 
-static constexpr std::string_view kVersionString = "Action Engine 0.2.2";
+static constexpr std::string_view kVersionString = "Action Engine 0.2.3";
 static constexpr absl::Duration kDebugWarningTimeout = absl::Seconds(5);
 
 BoostWebsocketStream::BoostWebsocketStream(
@@ -220,7 +220,7 @@ WsUrl WsUrl::FromStringOrDie(std::string_view url_str) {
 
 FiberAwareWebsocketStream::FiberAwareWebsocketStream(
     std::unique_ptr<BoostWebsocketStream> stream,
-    PerformHandshakeFn handshake_fn)
+    PerformHandshakeFn handshake_fn) noexcept
     : stream_(std::move(stream)), handshake_fn_(std::move(handshake_fn)) {}
 
 FiberAwareWebsocketStream::FiberAwareWebsocketStream(
@@ -637,14 +637,8 @@ absl::Status FiberAwareWebsocketStream::ReadText(
   }
 
   // Convert the received bytes to a string.
-  try {
-    *buffer = std::string(std::make_move_iterator(temp_buffer.begin()),
-                          std::make_move_iterator(temp_buffer.end()));
-  } catch (const std::exception& e) {
-    LOG(ERROR) << absl::StrFormat(
-        "Failed to convert received bytes to string: %s", e.what());
-    return absl::InternalError("Failed to convert received bytes to string");
-  }
+  *buffer = std::string(std::make_move_iterator(temp_buffer.begin()),
+                        std::make_move_iterator(temp_buffer.end()));
 
   return absl::OkStatus();
 }

@@ -29,7 +29,9 @@
 namespace act {
 
 LocalChunkStore::LocalChunkStore(std::string_view id) : LocalChunkStore() {
-  LocalChunkStore::SetIdOrDie(id);
+  // setting ID in a _local_ store cannot fail.
+  const absl::Status status = LocalChunkStore::SetId(id);
+  DCHECK_OK(status);
 }
 
 LocalChunkStore::~LocalChunkStore() {
@@ -79,7 +81,18 @@ absl::StatusOr<std::reference_wrapper<const Chunk>> LocalChunkStore::GetRef(
   if (!status.ok()) {
     return status;
   }
-  return act::FindOrDie(chunks_, seq);
+
+  const auto it = chunks_.find(seq);
+  // The chunks_ map should always be in sync, so this DCHECK is a sanity check
+  // for that invariant in debug builds.
+  DCHECK(it != chunks_.end());
+  if (it == chunks_.end()) {
+    return absl::InternalError(absl::StrCat(
+        "Invariant violation: chunks map is missing entry for seq ", seq,
+        ", but no previous error, cancellation, timeout or finalisation "
+        "happened."));
+  }
+  return it->second;
 }
 
 absl::StatusOr<std::reference_wrapper<const Chunk>>
@@ -88,8 +101,18 @@ LocalChunkStore::GetRefByArrivalOrder(int64_t arrival_offset,
   act::MutexLock lock(&mu_);
   if (arrival_order_to_seq_.contains(arrival_offset)) {
     const int64_t seq = arrival_order_to_seq_.at(arrival_offset);
-    const Chunk& chunk = act::FindOrDie(chunks_, seq);
-    return chunk;
+
+    const auto it = chunks_.find(seq);
+    // The two maps should always be in sync, so this DCHECK is a sanity check
+    // for that invariant in debug builds.
+    DCHECK(it != chunks_.end());
+    if (it == chunks_.end()) {
+      return absl::InternalError(absl::StrCat(
+          "Invariant violation: arrival order to seq map and chunks map are "
+          "out of sync for arrival offset ",
+          arrival_offset, " and seq ", seq));
+    }
+    return it->second;
   }
 
   if (no_further_puts_) {
@@ -123,8 +146,26 @@ LocalChunkStore::GetRefByArrivalOrder(int64_t arrival_offset,
   if (!status.ok()) {
     return status;
   }
-  return act::FindOrDie(chunks_,
-                        act::FindOrDie(arrival_order_to_seq_, arrival_offset));
+
+  const auto seq_it = arrival_order_to_seq_.find(arrival_offset);
+  DCHECK(seq_it != arrival_order_to_seq_.end());
+  if (seq_it == arrival_order_to_seq_.end()) {
+    return absl::InternalError(absl::StrCat(
+        "Invariant violation: arrival order to seq map is missing entry, "
+        "but it was just found earlier for arrival offset. ",
+        arrival_offset));
+  }
+  const int64_t seq = seq_it->second;
+
+  const auto chunk_it = chunks_.find(seq);
+  DCHECK(chunk_it != chunks_.end());
+  if (chunk_it == chunks_.end()) {
+    return absl::InternalError(absl::StrCat(
+        "Invariant violation: chunks map is missing entry, but it was just "
+        "found earlier for seq ",
+        seq));
+  }
+  return chunk_it->second;
 }
 
 absl::StatusOr<std::optional<Chunk>> LocalChunkStore::Pop(int64_t seq) {

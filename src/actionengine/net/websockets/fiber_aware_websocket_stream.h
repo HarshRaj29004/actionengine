@@ -150,7 +150,7 @@ class FiberAwareWebsocketStream {
  public:
   explicit FiberAwareWebsocketStream(
       std::unique_ptr<BoostWebsocketStream> stream = nullptr,
-      PerformHandshakeFn handshake_fn = {});
+      PerformHandshakeFn handshake_fn = {}) noexcept;
 
   FiberAwareWebsocketStream(const FiberAwareWebsocketStream&) = delete;
   FiberAwareWebsocketStream& operator=(const FiberAwareWebsocketStream&) =
@@ -260,13 +260,35 @@ absl::StatusOr<FiberAwareWebsocketStream> FiberAwareWebsocketStream::Connect(
   std::unique_ptr<BoostWebsocketStream> ws_stream;
   std::shared_ptr<boost::asio::ssl::context> ssl_ctx;
 
+  boost::system::error_code error;
+
   if (use_ssl) {
-    ssl_ctx = std::make_shared<boost::asio::ssl::context>(
-        boost::asio::ssl::context::tls_client);
-    ssl_ctx->set_default_verify_paths();
-    ws_stream = std::make_unique<BoostWebsocketStream>(context, *ssl_ctx);
+    try {
+      ssl_ctx = std::make_shared<boost::asio::ssl::context>(
+          boost::asio::ssl::context::tls_client);
+    } catch (const std::exception& exc) {
+      return absl::InternalError(
+          absl::StrFormat("Failed to create SSL context: %s", exc.what()));
+    }
+
+    ssl_ctx->set_default_verify_paths(error);
+    if (error) {
+      return absl::InternalError(error.message());
+    }
+
+    try {
+      ws_stream = std::make_unique<BoostWebsocketStream>(context, *ssl_ctx);
+    } catch (const std::exception& exc) {
+      return absl::InternalError(absl::StrFormat(
+          "Failed to create SSL websocket stream: %s", exc.what()));
+    }
   } else {
-    ws_stream = std::make_unique<BoostWebsocketStream>(context);
+    try {
+      ws_stream = std::make_unique<BoostWebsocketStream>(context);
+    } catch (const std::exception& exc) {
+      return absl::InternalError(absl::StrFormat(
+          "Failed to create Plain websocket stream: %s", exc.what()));
+    }
   }
 
   if (absl::Status resolve_status =
@@ -287,7 +309,6 @@ absl::StatusOr<FiberAwareWebsocketStream> FiberAwareWebsocketStream::Connect(
       return absl::InternalError("Failed to set SNI hostname");
     }
 
-    boost::system::error_code error;
     thread::PermanentEvent ssl_handshake_done;
     ws_stream->async_ssl_handshake(
         boost::asio::ssl::stream_base::client,

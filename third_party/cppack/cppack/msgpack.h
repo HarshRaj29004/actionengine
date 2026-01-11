@@ -1054,7 +1054,12 @@ void PackStandalone(PackableType&& obj, Packer* absl_nonnull packer) {
 template <typename PackableType>
 absl::Status UnpackStandalone(PackableType&& obj,
                               Unpacker* absl_nonnull unpacker) {
-  return CppackFromBytes(std::forward<PackableType>(obj), *unpacker);
+  absl::Status status =
+      CppackFromBytes(std::forward<PackableType>(obj), *unpacker);
+  if (const std::error_code ec = unpacker->GetErrorCode()) {
+    status.Update(absl::InternalError(ec.message()));
+  }
+  return status;
 }
 
 template <typename PackableType>

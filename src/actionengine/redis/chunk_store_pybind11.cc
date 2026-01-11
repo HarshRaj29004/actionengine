@@ -100,7 +100,7 @@ py::module_ MakeRedisModule(py::module_ scope, std::string_view name) {
           },
           py::arg("seq"), py::arg_v("timeout", -1),
           py::call_guard<py::gil_scoped_release>())
-      .def("pop", &redis::ChunkStore::PopOrDie, py::arg("seq"),
+      .def("pop", &redis::ChunkStore::Pop, py::arg("seq"),
            py::call_guard<py::gil_scoped_release>())
       .def(
           "put",

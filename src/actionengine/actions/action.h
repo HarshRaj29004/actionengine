@@ -218,7 +218,7 @@ class Action : public std::enable_shared_from_this<Action> {
    * @return
    *   An owning pointer to the new action.
    */
-  std::unique_ptr<Action> MakeActionInSameSession(
+  absl::StatusOr<std::unique_ptr<Action>> MakeActionInSameSession(
       std::string_view name, std::string_view action_id = "") const;
 
   /** Returns the action registry from the session. */

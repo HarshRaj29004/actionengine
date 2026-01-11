@@ -26,11 +26,16 @@ WORKDIR /opt
 # 1) Checkout the repo
 RUN git clone https://github.com/google-deepmind/actionengine /opt/actionengine
 
+COPY app /opt/actionengine/web/app
+COPY public /opt/actionengine/web/public
+
+ARG CACHEBUST=1
+
 # 2) Build and link the JS package
-RUN bash -lc "source $NVM_DIR/nvm.sh && cd /opt/actionengine/js && npm install && npm run build:bundle && yarn link"
+RUN echo $CACHEBUST && bash -lc "source $NVM_DIR/nvm.sh && cd /opt/actionengine/js && npm install && npm run build:bundle && yarn link"
 
 # 3) Install and link in the web app, and build it
-RUN bash -lc "source $NVM_DIR/nvm.sh && cd /opt/actionengine/web && yarn install && yarn link @helenapankov/actionengine && yarn build"
+RUN echo $CACHEBUST && bash -lc "source $NVM_DIR/nvm.sh && cd /opt/actionengine/web && yarn install && yarn link @helenapankov/actionengine && yarn build"
 
 WORKDIR /opt/actionengine/web
 

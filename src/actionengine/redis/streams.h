@@ -107,7 +107,9 @@ class RedisStream {
       args.push_back(it->second);
     }
     ASSIGN_OR_RETURN(Reply reply, redis_->ExecuteCommand("XADD", args));
-    return StreamMessageId::FromString(reply.ConsumeStringContentOrDie());
+    ASSIGN_OR_RETURN(std::string id_str,
+                     std::move(reply).ConsumeStringContent());
+    return StreamMessageId::FromString(std::move(id_str));
   }
 
   absl::StatusOr<StreamMessageId> XAdd(

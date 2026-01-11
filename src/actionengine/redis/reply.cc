@@ -20,50 +20,61 @@
 
 namespace act::redis {
 
-std::string Reply::ConsumeStringContentOrDie() {
-  CHECK(std::holds_alternative<StringReplyData>(data) ||
-        std::holds_alternative<VerbatimReplyData>(data) ||
-        std::holds_alternative<StatusReplyData>(data) ||
-        std::holds_alternative<ErrorReplyData>(data))
-      << "Cannot consume reply of type as string: " << static_cast<int>(type);
+absl::StatusOr<std::string> Reply::ConsumeStringContent() {
+  if (!std::holds_alternative<StringReplyData>(data) &&
+      !std::holds_alternative<VerbatimReplyData>(data) &&
+      !std::holds_alternative<StatusReplyData>(data) &&
+      !std::holds_alternative<ErrorReplyData>(data)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Cannot consume reply of type as string: ", static_cast<int>(type)));
+  }
 
   if (std::holds_alternative<StringReplyData>(data)) {
-    DCHECK(type == ReplyType::String)
-        << "Expected REDIS_REPLY_STRING set for StringReplyData, got "
-        << static_cast<int>(type);
+    if (type != ReplyType::String) {
+      return absl::InternalError(absl::StrCat(
+          "Expected REDIS_REPLY_STRING set for StringReplyData, got ",
+          static_cast<int>(type)));
+    }
     return std::get<StringReplyData>(std::move(data)).Consume();
   }
 
   if (std::holds_alternative<VerbatimReplyData>(data)) {
-    DCHECK(type == ReplyType::Verbatim)
-        << "Expected REDIS_REPLY_VERB set for VerbatimReplyData, got "
-        << static_cast<int>(type);
+    if (type != ReplyType::Verbatim) {
+      return absl::InternalError(absl::StrCat(
+          "Expected REDIS_REPLY_VERB set for VerbatimReplyData, got ",
+          static_cast<int>(type)));
+    }
     return std::get<VerbatimReplyData>(std::move(data)).Consume();
   }
 
   if (std::holds_alternative<StatusReplyData>(data)) {
-    DCHECK(type == ReplyType::Status)
-        << "Expected REDIS_REPLY_STATUS set for StatusReplyData, got "
-        << static_cast<int>(type);
+    if (type != ReplyType::Status) {
+      return absl::InternalError(absl::StrCat(
+          "Expected REDIS_REPLY_STATUS set for StatusReplyData, got ",
+          static_cast<int>(type)));
+    }
     return std::get<StatusReplyData>(std::move(data)).Consume();
   }
 
   if (std::holds_alternative<ErrorReplyData>(data)) {
-    DCHECK(type == ReplyType::Error)
-        << "Expected REDIS_REPLY_ERROR set for ErrorReplyData, got "
-        << static_cast<int>(type);
+    if (type != ReplyType::Error) {
+      return absl::InternalError(absl::StrCat(
+          "Expected REDIS_REPLY_ERROR set for ErrorReplyData, got ",
+          static_cast<int>(type)));
+    }
     return std::get<ErrorReplyData>(std::move(data)).Consume();
   }
 
-  LOG(FATAL)
-      << "ConsumeStringContentOrDie() is not implemented for this reply type: "
-      << static_cast<int>(type);
-  ABSL_ASSUME(false);
+  return absl::InternalError(absl::StrCat(
+      "ConsumeStringContent() is not implemented for this reply type: ",
+      static_cast<int>(type)));
 }
 
-std::vector<Reply> Reply::ConsumeAsArrayOrDie() {
-  CHECK(type == ReplyType::Array || type == ReplyType::Push)
-      << "Cannot consume reply of type as array: " << static_cast<int>(type);
+absl::StatusOr<std::vector<Reply>> Reply::ConsumeAsArray() {
+  if (type != ReplyType::Array && type != ReplyType::Push) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Cannot consume reply of type as array: ", static_cast<int>(type)));
+  }
 
   if (type == ReplyType::Array) {
     return std::get<ArrayReplyData>(std::move(data)).Consume();
@@ -73,37 +84,41 @@ std::vector<Reply> Reply::ConsumeAsArrayOrDie() {
     return std::get<PushReplyData>(std::move(data)).value_array.Consume();
   }
 
-  LOG(FATAL) << "ConsumeAsArrayOrDie() is not implemented for this reply type: "
-             << static_cast<int>(type);
-  ABSL_ASSUME(false);
+  return absl::InternalError(
+      absl::StrCat("ConsumeAsArray() is not implemented for this reply type: ",
+                   static_cast<int>(type)));
 }
 
-absl::flat_hash_map<std::string, Reply> Reply::ConsumeAsMapOrDie() {
-  CHECK(type == ReplyType::Map || type == ReplyType::Array)
-      << "Cannot consume reply of type as map: " << static_cast<int>(type);
+absl::StatusOr<absl::flat_hash_map<std::string, Reply>> Reply::ConsumeAsMap() {
+  if (type != ReplyType::Map && type != ReplyType::Array) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Cannot consume reply of type as map: ", static_cast<int>(type)));
+  }
 
   if (type == ReplyType::Map) {
     return std::get<MapReplyData>(std::move(data)).Consume();
   }
 
   if (type == ReplyType::Array) {
-    return std::get<ArrayReplyData>(std::move(data)).ConsumeAsMapOrDie();
-    ABSL_ASSUME(false);
+    return std::get<ArrayReplyData>(std::move(data)).ConsumeAsMap();
   }
 
-  LOG(FATAL) << "ConsumeAsMapOrDie() is not implemented for this reply type: "
-             << static_cast<int>(type);
-  ABSL_ASSUME(false);
+  return absl::InternalError(
+      absl::StrCat("ConsumeAsMap() is not implemented for this reply type: ",
+                   static_cast<int>(type)));
 }
 
 std::vector<Reply> ArrayReplyData::Consume() {
   return std::move(values);
 }
 
-absl::flat_hash_map<std::string, Reply> ArrayReplyData::ConsumeAsMapOrDie() {
-  CHECK(values.size() % 2 == 0)
-      << "ArrayReplyData cannot be consumed as a map if it has an odd number "
-         "of elements. Expected pairs of key-value replies.";
+absl::StatusOr<absl::flat_hash_map<std::string, Reply>>
+ArrayReplyData::ConsumeAsMap() {
+  if (values.size() % 2 != 0) {
+    return absl::InvalidArgumentError(
+        "ArrayReplyData cannot be consumed as a map if it has an odd number "
+        "of elements. Expected pairs of key-value replies.");
+  }
 
   absl::flat_hash_map<std::string, Reply> result;
   result.reserve(values.size() / 2);
@@ -112,10 +127,8 @@ absl::flat_hash_map<std::string, Reply> ArrayReplyData::ConsumeAsMapOrDie() {
     const size_t key_idx = pair_idx * 2;
     const size_t value_idx = key_idx + 1;
 
-    std::string key = std::move(values[key_idx]).ConsumeStringContentOrDie();
-    Reply value = std::move(values[value_idx]);
-
-    result[std::move(key)] = std::move(value);
+    ASSIGN_OR_RETURN(std::string key, values[key_idx].ConsumeStringContent());
+    result[std::move(key)] = std::move(values[value_idx]);
   }
   return result;
 }

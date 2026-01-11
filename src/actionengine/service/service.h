@@ -59,10 +59,6 @@ struct StreamToSessionConnection {
   absl::Status status;
 };
 
-std::unique_ptr<Action> MakeActionInConnection(
-    const StreamToSessionConnection& connection, std::string_view action_name,
-    std::string_view action_id = "");
-
 /**
  * A function type that handles a connection between a stream and a session.
  *

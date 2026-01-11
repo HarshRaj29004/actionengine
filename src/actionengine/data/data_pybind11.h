@@ -135,6 +135,8 @@ void BindChunkMetadata(py::handle scope,
 
 void BindChunk(py::handle scope, std::string_view name = "Chunk");
 
+void BindNodeRef(py::handle scope, std::string_view name = "NodeRef");
+
 void BindNodeFragment(py::handle scope, std::string_view name = "NodeFragment");
 
 void BindPort(py::handle scope, std::string_view name = "Port");

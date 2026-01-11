@@ -147,7 +147,7 @@ template <ConvertibleToChunk T>
 absl::StatusOr<Chunk> ToChunk(T value, std::string_view mimetype = {},
                               SerializerRegistry* const registry = nullptr) {
   if (mimetype.empty()) {
-    return act::ConvertToOrDie<Chunk>(std::move(value));
+    return act::ConvertTo<Chunk>(std::move(value));
   }
 
   SerializerRegistry* resolved_registry =
@@ -166,7 +166,7 @@ absl::StatusOr<T> FromChunkAs(Chunk chunk, std::string_view mimetype = {},
                               SerializerRegistry* const registry = nullptr)
     requires(ConvertibleFromChunk<T>) {
   if (mimetype.empty()) {
-    return act::ConvertToOrDie<T>(std::move(chunk));
+    return act::ConvertTo<T>(std::move(chunk));
   }
 
   if (!chunk.metadata) {
@@ -175,7 +175,7 @@ absl::StatusOr<T> FromChunkAs(Chunk chunk, std::string_view mimetype = {},
 
   if (chunk.metadata->mimetype.empty()) {
     chunk.metadata->mimetype = mimetype;
-    return act::ConvertToOrDie<T>(std::move(chunk));
+    return act::ConvertTo<T>(std::move(chunk));
   }
 
   const SerializerRegistry* resolved_registry =

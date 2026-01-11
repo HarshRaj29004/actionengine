@@ -198,13 +198,6 @@ class AsyncNode {
   auto Next(std::optional<absl::Duration> timeout = std::nullopt)
       -> absl::StatusOr<std::optional<T>>;
 
-  std::optional<Chunk> NextOrDie(
-      std::optional<absl::Duration> timeout = std::nullopt);
-
-  template <typename T>
-  auto NextOrDie(std::optional<absl::Duration> timeout = std::nullopt)
-      -> std::optional<T>;
-
   template <typename T>
   absl::StatusOr<T> ConsumeAs(
       std::optional<absl::Duration> timeout = std::nullopt);
@@ -264,14 +257,6 @@ inline auto AsyncNode::Next<NodeFragment>(std::optional<absl::Duration> timeout)
     -> absl::StatusOr<std::optional<NodeFragment>> {
   ChunkStoreReader& reader = GetReader();
   return reader.NextFragment(timeout);
-}
-
-template <typename T>
-auto AsyncNode::NextOrDie(std::optional<absl::Duration> timeout)
-    -> std::optional<T> {
-  auto next = Next<T>(timeout);
-  CHECK_OK(next.status());
-  return *std::move(next);
 }
 
 template <typename T>

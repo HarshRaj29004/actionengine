@@ -103,11 +103,11 @@ absl::Status SignallingClient::ConnectWithIdentity(
       stream_,
       FiberAwareWebsocketStream::Connect(
           *thread_pool_, address_, port_, absl::StrFormat("/%s", identity_),
+          /*prepare_stream_fn=*/
           [&headers](BoostWebsocketStream* absl_nonnull stream,
                      absl::AnyInvocable<void(
                          boost::beast::websocket::request_type&)>) {
-            return PrepareStreamWithHeaders(
-                stream, headers);  // No extra headers in this lambda.
+            return PrepareStreamWithHeaders(stream, headers);
           },
           use_ssl_));
 

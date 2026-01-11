@@ -112,20 +112,32 @@ absl::StatusOr<HelloReply> HelloReply::From(Reply reply) {
   if (reply.type == ReplyType::Map) {
     fields = std::get<MapReplyData>(std::move(reply).data).Consume();
   } else {
-    fields =
-        std::get<ArrayReplyData>(std::move(reply).data).ConsumeAsMapOrDie();
+    ASSIGN_OR_RETURN(
+        fields, std::get<ArrayReplyData>(std::move(reply).data).ConsumeAsMap());
   }
 
-  hello_reply.server =
-      act::FindOrDie(fields, "server").ConsumeStringContentOrDie();
-  hello_reply.version =
-      act::FindOrDie(fields, "version").ConsumeStringContentOrDie();
-  hello_reply.protocol_version =
-      static_cast<int32_t>(act::FindOrDie(fields, "proto").ToIntOrDie());
-  hello_reply.id =
-      static_cast<int32_t>(act::FindOrDie(fields, "id").ToIntOrDie());
-  hello_reply.mode = act::FindOrDie(fields, "mode").ConsumeStringContentOrDie();
-  hello_reply.role = act::FindOrDie(fields, "role").ConsumeStringContentOrDie();
+  ASSIGN_OR_RETURN(Reply & server_field, act::FindValue(fields, "server"));
+  ASSIGN_OR_RETURN(hello_reply.server,
+                   std::move(server_field).ConsumeStringContent());
+
+  ASSIGN_OR_RETURN(Reply & version_field, act::FindValue(fields, "version"));
+  ASSIGN_OR_RETURN(hello_reply.version,
+                   std::move(version_field).ConsumeStringContent());
+
+  ASSIGN_OR_RETURN(Reply & proto_field, act::FindValue(fields, "proto"));
+  ASSIGN_OR_RETURN(hello_reply.protocol_version,
+                   std::move(proto_field).ToInt());
+
+  ASSIGN_OR_RETURN(Reply & id_field, act::FindValue(fields, "id"));
+  ASSIGN_OR_RETURN(hello_reply.id, std::move(id_field).ToInt());
+
+  ASSIGN_OR_RETURN(Reply & mode_field, act::FindValue(fields, "mode"));
+  ASSIGN_OR_RETURN(hello_reply.mode,
+                   std::move(mode_field).ConsumeStringContent());
+
+  ASSIGN_OR_RETURN(Reply & role_field, act::FindValue(fields, "role"));
+  ASSIGN_OR_RETURN(hello_reply.role,
+                   std::move(role_field).ConsumeStringContent());
 
   // std::vector<Reply> modules_replies =
   //     std::get<ArrayReplyData>(act::FindOrDie(fields, "modules").data)
@@ -602,32 +614,74 @@ void Redis::OnPubsubReply(void* hiredis_reply) {
     return;
   }
 
-  auto reply_elements = ConvertToOrDie<std::vector<Reply>>(std::move(reply));
-  auto channel = ConvertToOrDie<std::string>(reply_elements[1]);
-  if (reply_elements.empty()) {
+  absl::StatusOr<std::vector<Reply>> reply_elements =
+      ConvertTo<std::vector<Reply>>(std::move(reply));
+  if (!reply_elements.ok()) {
+    OnFailedConversion(reply_elements.status());
+  }
+  if (reply_elements->empty()) {
     LOG(WARNING) << "Received empty reply in PubsubCallback for subscriptions "
-                    "to channel: "
-                 << channel;
+                    "(empty elements)";
     return;
   }
 
-  if (const auto message_type = ConvertToOrDie<std::string>(reply_elements[0]);
-      message_type == "subscribe" || message_type == "psubscribe") {
-    for (const auto& subscription : subscriptions_[channel]) {
-      // Notify all subscriptions about the new subscription.
-      subscription->Subscribe();
+  absl::StatusOr<std::string> message_type =
+      ConvertTo<std::string>((*reply_elements)[0]);
+  if (!message_type.ok()) {
+    OnFailedConversion(message_type.status());
+    return;
+  }
+
+  // In RESP2 pub/sub replies:
+  //  - message: ["message", channel, message]
+  //  - pmessage: ["pmessage", pattern, channel, message]
+  //  - subscribe/unsubscribe: [type, channel_or_pattern, count]
+
+  if (*message_type == "subscribe" || *message_type == "psubscribe") {
+    absl::StatusOr<std::string> key =
+        ConvertTo<std::string>((*reply_elements)[1]);
+    if (!key.ok()) {
+      OnFailedConversion(key.status());
+      return;
     }
-  } else if (message_type == "unsubscribe" || message_type == "punsubscribe") {
-    for (const auto& subscription : subscriptions_[channel]) {
+    for (const auto& subscription : subscriptions_[*key]) {
+      // Notify only if not already notified to avoid double notifications.
+      if (!subscription->subscribe_event_.HasBeenNotified()) {
+        subscription->Subscribe();
+      }
+    }
+  } else if (*message_type == "unsubscribe" ||
+             *message_type == "punsubscribe") {
+    absl::StatusOr<std::string> key =
+        ConvertTo<std::string>((*reply_elements)[1]);
+    if (!key.ok()) {
+      OnFailedConversion(key.status());
+      return;
+    }
+    for (const auto& subscription : subscriptions_[*key]) {
       // Notify all subscriptions about the unsubscription.
       subscription->Unsubscribe();
     }
   } else {
-    auto subscriptions = subscriptions_[channel];
+    // Regular messages.
+    if (*message_type != "message" && *message_type != "pmessage") {
+      LOG(WARNING) << "Unexpected pubsub message type: " << message_type;
+      return;
+    }
+
+    const bool pmessage = (*message_type == "pmessage");
+    absl::StatusOr<std::string> key = ConvertTo<std::string>(
+        (*reply_elements)[pmessage ? 2 : 1]);  // channel or pattern
+    if (!key.ok()) {
+      OnFailedConversion(key.status());
+      return;
+    }
+    const size_t payload_index = pmessage ? 3 : 2;
+    auto subscriptions = subscriptions_[*key];
     mu_.unlock();
     // For regular messages, we pass the reply to the subscription.
     for (const auto& subscription : subscriptions) {
-      subscription->Message(reply_elements[2]);
+      subscription->Message((*reply_elements)[payload_index]);
     }
     mu_.lock();
   }
@@ -640,7 +694,94 @@ void Redis::OnPushReply(redisReply* hiredis_reply) {
     LOG(ERROR) << "Failed to parse push reply.";
     return;
   }
-  // Process the reply as needed.
+  // RESP3 push frames for pubsub look like:
+  // ["pubsub","message",channel,message]
+  // ["pubsub","pmessage",pattern,channel,message]
+  // ["pubsub","subscribe"|"psubscribe"|"unsubscribe"|"punsubscribe", key, count]
+  if (reply.type != ReplyType::Array) {
+    LOG(WARNING) << "Unexpected PUSH reply type: "
+                 << static_cast<int>(reply.type);
+    return;
+  }
+  absl::StatusOr<std::vector<Reply>> elems =
+      ConvertTo<std::vector<Reply>>(std::move(reply));
+  if (!elems.ok()) {
+    OnFailedConversion(elems.status());
+    return;
+  }
+  if (elems->size() < 3) {
+    LOG(WARNING) << "PUSH reply too short.";
+    return;
+  }
+
+  absl::StatusOr<std::string> category = ConvertTo<std::string>((*elems)[0]);
+  if (!category.ok()) {
+    OnFailedConversion(category.status());
+    return;
+  }
+  if (*category != "pubsub") {
+    // Ignore other push categories.
+    return;
+  }
+
+  absl::StatusOr<std::string> type = ConvertTo<std::string>((*elems)[1]);
+  if (!type.ok()) {
+    OnFailedConversion(type.status());
+    return;
+  }
+  if (*type == "subscribe" || *type == "psubscribe") {
+    absl::StatusOr<std::string> key = ConvertTo<std::string>((*elems)[2]);
+    if (!key.ok()) {
+      OnFailedConversion(key.status());
+      return;
+    }
+    for (const auto& subscription : subscriptions_[*key]) {
+      if (!subscription->subscribe_event_.HasBeenNotified()) {
+        subscription->Subscribe();
+      }
+    }
+    return;
+  }
+  if (*type == "unsubscribe" || *type == "punsubscribe") {
+    absl::StatusOr<std::string> key = ConvertTo<std::string>((*elems)[2]);
+    if (!key.ok()) {
+      OnFailedConversion(key.status());
+      return;
+    }
+    for (const auto& subscription : subscriptions_[*key]) {
+      subscription->Unsubscribe();
+    }
+    return;
+  }
+
+  if (*type == "message") {
+    absl::StatusOr<std::string> key = ConvertTo<std::string>((*elems)[2]);
+    if (!key.ok()) {
+      OnFailedConversion(key.status());
+      return;
+    }
+    auto subscriptions = subscriptions_[*key];
+    mu_.unlock();
+    for (const auto& subscription : subscriptions) {
+      subscription->Message((*elems)[3]);
+    }
+    mu_.lock();
+    return;
+  }
+  if (*type == "pmessage") {
+    LOG(FATAL) << "PUSH pmessage handling not implemented yet.";
+    return;
+  }
+  LOG(WARNING) << "Unknown pubsub PUSH type: " << type;
+}
+
+void Redis::OnFailedConversion(absl::Status status) {
+  // Crash OK: this method should only be called for error statuses.
+  CHECK(!status.ok());
+
+  // TODO: for now, we crash here, but should instead propagate the error
+  // properly.
+  LOG(FATAL) << "Failed to convert Redis reply: " << status.message();
 }
 
 absl::StatusOr<Reply> Redis::Get(std::string_view key) {

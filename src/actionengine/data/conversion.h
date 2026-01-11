@@ -35,31 +35,12 @@ absl::Status Assign(Src&& from, Dst* absl_nonnull to) {
 }
 
 template <typename Dst, typename Src>
-void AssignOrDie(Src&& from, Dst* absl_nonnull to) {
-  if (const absl::Status status = Assign(std::forward<Src>(from), to);
-      !status.ok()) {
-    LOG(FATAL) << "Conversion failed: " << status;
-    ABSL_ASSUME(false);
-  }
-}
-
-template <typename Dst, typename Src>
 absl::StatusOr<Dst> ConvertTo(Src&& from) {
   Dst result;
   if (auto status = Assign(std::forward<Src>(from), &result); !status.ok()) {
     return status;
   }
   return result;
-}
-
-template <typename Dst, typename Src>
-Dst ConvertToOrDie(Src&& from) {
-  if (auto result = ConvertTo<Dst>(std::forward<Src>(from)); !result.ok()) {
-    LOG(FATAL) << "Conversion failed: " << result.status();
-    ABSL_ASSUME(false);
-  } else {
-    return *result;
-  }
 }
 
 }  // namespace act

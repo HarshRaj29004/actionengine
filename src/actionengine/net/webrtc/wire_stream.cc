@@ -255,6 +255,32 @@ void EstablishmentState::set_signalling_client(
   signalling_client_ = std::move(signalling_client);
 }
 
+rtc::PeerConnection* EstablishmentState::connection() const {
+  return connection_.get();
+}
+
+void EstablishmentState::set_connection(
+    std::unique_ptr<rtc::PeerConnection> connection) {
+  connection_ = std::move(connection);
+}
+
+rtc::DataChannel* EstablishmentState::data_channel() const {
+  return data_channel_.get();
+}
+
+void EstablishmentState::set_data_channel(
+    std::shared_ptr<rtc::DataChannel> data_channel) {
+  data_channel_ = std::move(data_channel);
+}
+
+bool EstablishmentState::should_send_candidates() const {
+  return should_send_candidates_.load();
+}
+
+void EstablishmentState::set_should_send_candidates(bool value) {
+  should_send_candidates_.store(value);
+}
+
 void EstablishmentState::EnsureNoCallbacks() const {
   if (signalling_client_ != nullptr) {
     signalling_client_->ResetCallbacks();
@@ -482,11 +508,14 @@ absl::StatusOr<std::optional<WireMessage>> WebRtcWireStream::Receive(
     // Check this because we might have already closed the channel due to
     // an error or onClosed() for the underlying data channel.
     if (!closed_) {
-      CHECK(recv_channel_.length() == 0)
-          << "WebRtcWireStream received a half-close message, but there are "
-             "still messages in the receive channel. This should not happen.";
       recv_channel_.writer()->Close();
       closed_ = true;
+
+      WireMessage ignored;
+      while (recv_channel_.reader()->Read(&ignored)) {
+        // Drain any remaining messages: after half-close, we should not
+        // receive any more messages, but if we do, just ignore them.
+      }
     }
 
     if (half_closed_) {

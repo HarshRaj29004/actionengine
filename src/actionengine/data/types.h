@@ -76,21 +76,9 @@ struct ChunkMetadata {
 
   template <typename Sink>
   friend void AbslStringify(Sink& sink, const ChunkMetadata& metadata);
-
-  friend bool operator==(const ChunkMetadata& lhs, const ChunkMetadata& rhs) {
-    if (lhs.mimetype != rhs.mimetype || lhs.timestamp != rhs.timestamp) {
-      return false;
-    }
-    bool attributes_equal = lhs.attributes.size() == rhs.attributes.size();
-    for (const auto& [key, value] : lhs.attributes) {
-      if (!attributes_equal)
-        break;
-      auto it = rhs.attributes.find(key);
-      attributes_equal &= it != rhs.attributes.end() && it->second == value;
-    }
-    return attributes_equal;
-  }
 };
+
+bool operator==(const ChunkMetadata& lhs, const ChunkMetadata& rhs);
 
 /**
  *  ActionEngine chunk.
@@ -167,6 +155,9 @@ struct NodeRef {
    */
   std::optional<uint32_t> length;
 
+  template <typename Sink>
+  friend void AbslStringify(Sink& sink, const NodeRef& fragment);
+
   friend bool operator==(const NodeRef& lhs, const NodeRef& rhs) {
     return lhs.id == rhs.id && lhs.offset == rhs.offset &&
            lhs.length == rhs.length;
@@ -203,10 +194,7 @@ struct NodeFragment {
   }
 
   absl::StatusOr<std::reference_wrapper<Chunk>> GetChunk();
-  Chunk& GetChunkOrDie();
-
   absl::StatusOr<std::reference_wrapper<NodeRef>> GetNodeRef();
-  NodeRef& GetNodeRefOrDie();
 };
 
 /// A mapping of a parameter name to its node ID in an action.
@@ -252,12 +240,20 @@ struct ActionMessage {
    */
   std::vector<Port> outputs;
 
+  /** Additional headers associated with the action message.
+   *
+   * This is a mapping of header names to their values, allowing for
+   * extensibility and the inclusion of custom metadata as needed.
+   */
+  absl::flat_hash_map<std::string, std::string> headers;
+
   template <typename Sink>
   friend void AbslStringify(Sink& sink, const ActionMessage& action);
 
   friend bool operator==(const ActionMessage& lhs, const ActionMessage& rhs) {
     return lhs.id == rhs.id && lhs.name == rhs.name &&
-           lhs.inputs == rhs.inputs && lhs.outputs == rhs.outputs;
+           lhs.inputs == rhs.inputs && lhs.outputs == rhs.outputs &&
+           lhs.headers == rhs.headers;
   }
 };
 
@@ -280,6 +276,13 @@ struct WireMessage {
    * the receiving node or some end destination in case of a router/proxy.
    */
   std::vector<ActionMessage> actions;
+
+  /** Additional headers associated with the message.
+   *
+   * This is a mapping of header names to their values, allowing for
+   * extensibility and the inclusion of custom metadata as needed.
+   */
+  absl::flat_hash_map<std::string, std::string> headers;
 
   template <typename Sink>
   friend void AbslStringify(Sink& sink, const WireMessage& message);
@@ -334,6 +337,15 @@ void AbslStringify(Sink& sink, const Chunk& chunk) {
   }
   if (!chunk.ref.empty()) {
     absl::Format(&sink, "ref: %s\n", chunk.ref);
+  }
+}
+
+template <typename Sink>
+void AbslStringify(Sink& sink, const NodeRef& fragment) {
+  absl::Format(&sink, "id: %s\n", fragment.id);
+  absl::Format(&sink, "offset: %d\n", fragment.offset);
+  if (fragment.length.has_value()) {
+    absl::Format(&sink, "length: %d\n", *fragment.length);
   }
 }
 
