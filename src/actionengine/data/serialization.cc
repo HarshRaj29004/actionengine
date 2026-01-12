@@ -14,6 +14,19 @@
 
 #include "actionengine/data/serialization.h"
 
+#include <any>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include <absl/base/call_once.h>
+#include <absl/status/status.h>
+#include <absl/status/statusor.h>
+#include <absl/strings/str_format.h>
+
+#include "actionengine/data/types.h"
+
 namespace act {
 absl::StatusOr<std::any> SerializerRegistry::Deserialize(
     Bytes data, std::string_view mimetype) const {
@@ -28,9 +41,10 @@ absl::StatusOr<std::any> SerializerRegistry::Deserialize(
         "No deserializer is registered for mimetype %v.", mimetype));
   }
 
-  for (const auto& deserializer : it->second | std::views::reverse) {
+  for (auto deserializer_it = it->second.rbegin();
+       deserializer_it != it->second.rend(); ++deserializer_it) {
     // Attempt to deserialize the data using the registered deserializer.
-    if (auto result = deserializer(data); result.ok()) {
+    if (auto result = (*deserializer_it)(data); result.ok()) {
       return std::move(*result);
     }
   }

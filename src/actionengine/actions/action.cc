@@ -16,6 +16,8 @@
 
 #include <functional>
 
+#include <absl/base/nullability.h>
+#include <absl/base/thread_annotations.h>
 #include <absl/log/check.h>
 #include <absl/log/log.h>
 #include <absl/status/statusor.h>
@@ -24,8 +26,16 @@
 #include <absl/time/clock.h>
 
 #include "actionengine/actions/registry.h"
+#include "actionengine/actions/schema.h"
+#include "actionengine/concurrency/concurrency.h"
 #include "actionengine/data/conversion.h"
+#include "actionengine/data/types.h"
+#include "actionengine/net/stream.h"
+#include "actionengine/nodes/async_node.h"
+#include "actionengine/nodes/node_map.h"
 #include "actionengine/service/session.h"
+#include "actionengine/stores/chunk_store_reader.h"
+#include "actionengine/stores/chunk_store_writer.h"
 #include "actionengine/util/random.h"
 #include "actionengine/util/status_macros.h"
 
@@ -37,7 +47,7 @@ Action::Action(ActionSchema schema, std::string_view id,
       id_(id.empty() ? GenerateUUID4() : std::string(id)),
       cancelled_(std::make_unique<thread::PermanentEvent>()) {
   absl::StatusOr<ActionMessage> message_or = schema_.GetActionMessage(id_);
-  DCHECK(message_or.ok())
+  DCHECK_OK(message_or.status())
       << "Invariant violated: getting action message from a schema should only "
          "NOT succeed if the id is empty.";
   ActionMessage& message = *message_or;

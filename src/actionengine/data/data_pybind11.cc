@@ -14,8 +14,14 @@
 
 #include "actionengine/data/data_pybind11.h"
 
+#include <any>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <pybind11/attr.h>
@@ -180,7 +186,7 @@ void BindChunkMetadata(py::handle scope, std::string_view name) {
           "get_attribute",
           [](const ChunkMetadata& metadata,
              std::string_view key) -> absl::StatusOr<py::bytes> {
-            const auto it = metadata.attributes.find(std::string(key));
+            const auto it = metadata.attributes.find(key);
             if (it == metadata.attributes.end()) {
               return absl::NotFoundError(
                   absl::StrCat("Attribute not found: ", key));
@@ -192,13 +198,13 @@ void BindChunkMetadata(py::handle scope, std::string_view name) {
           "set_attribute",
           [](ChunkMetadata& metadata, std::string_view key,
              const py::bytes& value) {
-            metadata.attributes[std::string(key)] = std::string(value);
+            metadata.attributes[key] = std::string(value);
           },
           py::arg("key"), py::arg("value"))
       .def("set_attribute",
            [](ChunkMetadata& metadata, std::string_view key,
               const py::str& value) {
-             metadata.attributes[std::string(key)] =
+             metadata.attributes[key] =
                  std::string(value.attr("encode")("utf-8").cast<std::string>());
            })
       .def("__repr__",
@@ -452,7 +458,7 @@ void BindSerializerRegistry(py::handle scope, std::string_view name) {
           GetTypeToMimetypeDict(self.get())[obj_type] = mimetype_str;
           GetMimetypeToTypeDict(self.get())[mimetype_str.c_str()] = obj_type;
         }
-        self->RegisterSerializer(std::string(mimetype),
+        self->RegisterSerializer(mimetype,
                                  PySerializerToCppSerializer(serializer));
         return absl::OkStatus();
       },

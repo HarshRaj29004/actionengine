@@ -15,19 +15,20 @@
 #ifndef ACTIONENGINE_STORES_BYTE_CHUNKING_H_
 #define ACTIONENGINE_STORES_BYTE_CHUNKING_H_
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <iterator>
-#include <optional>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include <absl/base/thread_annotations.h>
+#include <absl/container/inlined_vector.h>
 #include <absl/log/check.h>
 #include <absl/status/statusor.h>
 
+#include "actionengine/concurrency/concurrency.h"
 #include "actionengine/data/msgpack.h"  // IWYU pragma: keep
+#include "actionengine/data/types.h"
 #include "actionengine/stores/local_chunk_store.h"
 
 namespace act::data {

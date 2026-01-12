@@ -33,19 +33,18 @@ using Deserializer = std::function<absl::StatusOr<std::any>(Bytes)>;
 class SerializerRegistry {
  public:
   template <typename T>
-  [[nodiscard]] absl::StatusOr<Bytes> Serialize(
-      T value, std::string_view mimetype) const;
+  absl::StatusOr<Bytes> Serialize(T value, std::string_view mimetype) const;
 
-  [[nodiscard]] absl::StatusOr<std::any> Deserialize(
-      Bytes data, std::string_view mimetype) const;
+  absl::StatusOr<std::any> Deserialize(Bytes data,
+                                       std::string_view mimetype) const;
 
   // The registered deserializer must return an std::any which actually
   // contains the type T. This is not checked at compile time and is not
   // the responsibility of the registry. Essentially, this method is just
   // a convenience wrapper for std::any_cast<T>(result)-or-status.
   template <typename T>
-  [[nodiscard]] absl::StatusOr<T> DeserializeAs(
-      const Bytes& data, std::string_view mimetype) const;
+  absl::StatusOr<T> DeserializeAs(const Bytes& data,
+                                  std::string_view mimetype) const;
 
   void RegisterSerializer(std::string_view mimetype, Serializer serializer);
 

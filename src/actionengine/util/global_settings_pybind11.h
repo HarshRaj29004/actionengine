@@ -15,6 +15,8 @@
 #ifndef ACTIONENGINE_UTIL_GLOBAL_SETTINGS_PYBIND11_H_
 #define ACTIONENGINE_UTIL_GLOBAL_SETTINGS_PYBIND11_H_
 
+#include <string_view>
+
 #include <pybind11/pybind11.h>
 
 namespace act::pybindings {

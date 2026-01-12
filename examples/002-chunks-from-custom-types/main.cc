@@ -18,6 +18,7 @@
 #include <actionengine/redis/redis.h>
 #include <actionengine/stores/local_chunk_store.h>
 #include <actionengine/util/random.h>
+#include <actionengine/util/status_macros.h>
 
 // Simply some type aliases to make the code more readable. These declarations
 // are not included anywhere, so it is okay to use such shorthands to make the
@@ -70,7 +71,7 @@ std::unique_ptr<act::redis::Redis> GetRedisOrDie() {
   return *std::move(redis_or);
 }
 
-int main(int, char**) {
+absl::Status Main() {
   absl::InstallFailureSignalHandler({});
   // create some users
   const std::vector users = {
@@ -123,7 +124,8 @@ int main(int, char**) {
 
   int user_number = 0;
   while (true) {
-    std::optional<User> user = node_that_streams_users.NextOrDie<User>();
+    ASSIGN_OR_RETURN(std::optional<User> user,
+                     node_that_streams_users.Next<User>());
 
     if (!node_that_streams_users.GetReaderStatus().ok()) {
       break;
@@ -142,5 +144,9 @@ int main(int, char**) {
     ++user_number;
   }
 
-  return 0;
+  return absl::OkStatus();
+}
+
+int main(int, char**) {
+  CHECK_OK(Main());
 }

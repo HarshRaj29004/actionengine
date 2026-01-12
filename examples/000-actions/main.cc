@@ -131,8 +131,9 @@ absl::StatusOr<std::string> CallEcho(
     std::string_view text, Session* absl_nonnull session,
     const std::shared_ptr<WireStream>& stream) {
 
-  const auto echo = session->GetActionRegistry()->MakeAction(
-      /*name=*/"echo");
+  ASSIGN_OR_RETURN(const std::unique_ptr<Action> echo,
+                   session->GetActionRegistry()->MakeAction(
+                       /*name=*/"echo"));
   echo->BindNodeMap(session->GetNodeMap());
   echo->BindSession(session);
   echo->BindStream(stream.get());

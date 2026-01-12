@@ -69,7 +69,8 @@ absl::Status RunPrint(const std::shared_ptr<Action>& action) {
 }
 
 absl::Status RunBidiEcho(const std::shared_ptr<Action>& action) {
-  const auto print_action = action->MakeActionInSameSession("print_text");
+  ASSIGN_OR_RETURN(const std::unique_ptr<Action> print_action,
+                   action->MakeActionInSameSession("print_text"));
   if (auto status = print_action->Call(); !status.ok()) {
     return status;
   }
@@ -152,7 +153,8 @@ absl::Status Main(int argc, char** argv) {
       break;
     }
 
-    const auto action = action_registry.MakeAction("bidi_echo");
+    ASSIGN_OR_RETURN(const std::unique_ptr<Action> action,
+                     action_registry.MakeAction("bidi_echo"));
     action->BindNodeMap(&node_map);
     action->BindSession(&session);
     action->BindStream(stream.get());

@@ -156,7 +156,7 @@ class AsyncNode(_C.nodes.AsyncNode):
 
     def next_chunk_sync(self, timeout: float = -1.0) -> Optional[Chunk]:
         self._ensure_reader_options_set()
-        return super().next_chunk(timeout)
+        return super().next_chunk(timeout)  # pytype: disable=attribute-error
 
     async def next_fragment(
         self, timeout: float = -1.0
@@ -171,9 +171,11 @@ class AsyncNode(_C.nodes.AsyncNode):
     ) -> Optional[NodeFragment]:
         """Returns the next fragment in the store, or None if the store is empty."""
         self._ensure_reader_options_set()
-        return super().next_fragment(timeout)
+        return super().next_fragment(timeout)  # pytype: disable=attribute-error
 
-    def put_fragment(self, fragment: NodeFragment, seq: int = -1):
+    def put_fragment(
+        self, fragment: NodeFragment, seq: int = -1
+    ):  # pylint: disable=useless-parent-delegation
         """Puts a fragment into the node's chunk store.
 
         This method will only block if the node's chunk store writer's buffer is
@@ -187,9 +189,13 @@ class AsyncNode(_C.nodes.AsyncNode):
           None if the fragment was put synchronously with no event loop, or an
           awaitable if the fragment was put asynchronously within an event loop.
         """
-        return super().put_fragment(fragment, seq)
+        return super().put_fragment(
+            fragment, seq
+        )  # pytype: disable=attribute-error
 
-    def put_chunk(self, chunk: Chunk, seq: int = -1, final: bool = False):
+    def put_chunk(
+        self, chunk: Chunk, seq: int = -1, final: bool = False
+    ):  # pylint: disable=useless-parent-delegation
         """Puts a chunk into the node's chunk store.
 
         This method will only block if the node's chunk store writer's buffer is
@@ -204,14 +210,16 @@ class AsyncNode(_C.nodes.AsyncNode):
           None if the chunk was put synchronously with no event loop, or an
           awaitable if the chunk was put asynchronously within an event loop.
         """
-        return super().put_chunk(chunk, seq, final)
+        return super().put_chunk(
+            chunk, seq, final
+        )  # pytype: disable=attribute-error,
 
     def put_and_finalize(
         self,
         obj: Any,
         seq: int = -1,
         mimetype: str | None = None,
-    ) -> Optional[Awaitable[None]]:
+    ):
         return self.put(obj, seq, True, mimetype)
 
     def put_sync(
@@ -250,7 +258,7 @@ class AsyncNode(_C.nodes.AsyncNode):
         seq: int = -1,
         final: bool = False,
         mimetype: str | None = None,
-    ) -> Optional[Awaitable[None]]:
+    ):
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -285,7 +293,7 @@ class AsyncNode(_C.nodes.AsyncNode):
             final=True,
         )
 
-    def finalize(self) -> Optional[Awaitable[None]]:
+    def finalize(self):
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -295,7 +303,7 @@ class AsyncNode(_C.nodes.AsyncNode):
     # pylint: disable-next=[useless-parent-delegation]
     def get_id(self) -> str:
         """Returns the id of the node."""
-        return super().get_id()
+        return super().get_id()  # pytype: disable=attribute-error
 
     def set_reader_options(
         self,
@@ -320,7 +328,7 @@ class AsyncNode(_C.nodes.AsyncNode):
           The node itself.
         """
 
-        super().set_reader_options(
+        super().set_reader_options(  # pytype: disable=attribute-error
             ordered,
             remove_chunks,
             n_chunks_to_buffer,
@@ -357,9 +365,9 @@ class AsyncNode(_C.nodes.AsyncNode):
             chunk = await self.next_chunk()
             while chunk is not None and utils.is_null_chunk(chunk):
                 chunk = await self.next_chunk()
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
             print("AsyncNode.__anext__: CancelledError")
-            raise StopAsyncIteration()
+            raise StopAsyncIteration() from exc
 
         if chunk is None:
             raise StopAsyncIteration()

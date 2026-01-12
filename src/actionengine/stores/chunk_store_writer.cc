@@ -15,10 +15,22 @@
 #include "actionengine/stores/chunk_store_writer.h"
 
 #include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <string>
-#include <string_view>
+#include <utility>
 
+#include <absl/base/thread_annotations.h>
+#include <absl/container/flat_hash_map.h>
 #include <absl/log/check.h>
+#include <absl/status/status.h>
+#include <absl/status/statusor.h>
+
+#include "actionengine/concurrency/concurrency.h"
+#include "actionengine/data/types.h"
+#include "actionengine/net/stream.h"
+#include "actionengine/stores/chunk_store.h"
 
 namespace act {
 

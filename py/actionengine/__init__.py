@@ -64,6 +64,7 @@ to_bytes = data.to_bytes
 to_chunk = data.to_chunk
 from_chunk = data.from_chunk
 
+get_global_settings = global_settings.get_global_settings
 get_global_act_settings = global_settings.get_global_act_settings
 
 

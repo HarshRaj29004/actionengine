@@ -14,6 +14,12 @@
 
 #include "actionengine/util/global_settings_pybind11.h"
 
+#include <string>
+#include <string_view>
+
+#include <absl/time/time.h>
+#include <pybind11/pybind11.h>
+
 #include "actionengine/util/global_settings.h"
 
 namespace act::pybindings {

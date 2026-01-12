@@ -169,7 +169,6 @@ class AsyncNode {
     *   in a valid state, it returns `absl::OkStatus()`. If there is an error,
     *   it returns an appropriate error status.
     */
-  [[nodiscard]]
   auto GetWriterStatus() const -> absl::Status;
 
   [[nodiscard]] auto GetId() const -> std::string;

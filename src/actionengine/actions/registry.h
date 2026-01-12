@@ -15,12 +15,14 @@
 #ifndef ACTIONENGINE_ACTIONS_REGISTRY_H_
 #define ACTIONENGINE_ACTIONS_REGISTRY_H_
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/status/statusor.h>
 
 #include "actionengine/actions/schema.h"
 #include "actionengine/data/types.h"
