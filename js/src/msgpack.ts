@@ -14,13 +14,7 @@
  * limitations under the License.
  */
 
-import {
-  encode,
-  decode,
-  decodeAsync,
-  decodeMulti,
-  Decoder,
-} from '@msgpack/msgpack';
+import { encode, decode, decodeAsync, decodeMulti } from '@msgpack/msgpack';
 import {
   Chunk,
   ChunkMetadata,
@@ -320,20 +314,21 @@ export const encodeActionMessage = (message: ActionMessage) => {
 };
 
 export const decodeActionMessage = (bytes: Uint8Array): ActionMessage => {
-  const decoder = new Decoder();
-  const parts = decoder.decodeMulti(bytes) as unknown as [
+  const [id, name, inputs, outputs, statedHeaderCount, ...rest] = decodeMulti(
+    bytes,
+  ) as unknown as [
     string,
     string,
     Uint8Array[],
     Uint8Array[],
+    number,
     ...unknown[],
   ];
 
-  let offset = 5; // Skip first, constant space parts (id, name, inputs, outputs, headerCount)
-  const statedHeaderCount = parts[offset - 1] as number;
-  const actualHeaderKVCount = parts.length - 5;
+  const actualHeaderKVCount = rest.length;
 
   if (actualHeaderKVCount % 2 !== 0) {
+    console.log(rest);
     throw new Error(
       `Malformed headers in ActionMessage: expected key-value pairs but got an odd number of elements`,
     );
@@ -348,17 +343,11 @@ export const decodeActionMessage = (bytes: Uint8Array): ActionMessage => {
 
   const headers = new Map<string, Uint8Array<ArrayBuffer>>();
   for (let i = 0; i < statedHeaderCount; i++) {
-    const key = parts[offset + 2 * i] as string;
-    const value = parts[offset + 2 * i + 1] as Uint8Array<ArrayBuffer>;
+    const key = rest[2 * i] as string;
+    const value = rest[2 * i + 1] as Uint8Array<ArrayBuffer>;
     headers.set(key, value);
   }
 
-  const [id, name, inputs, outputs] = parts.slice(0, 4) as [
-    string,
-    string,
-    Uint8Array[],
-    Uint8Array[],
-  ];
   return {
     id,
     name,
