@@ -95,6 +95,11 @@ Action::~Action() {
   // node_map_->Extract(status_node_id).reset();
 }
 
+std::string Action::MakeNodeId(std::string_view action_id,
+                               std::string_view node_name) {
+  return absl::StrCat(action_id, "#", node_name);
+}
+
 ActionMessage Action::GetActionMessage() const {
   std::vector<Port> input_parameters;
   input_parameters.reserve(input_name_to_id_.size());
@@ -114,11 +119,13 @@ ActionMessage Action::GetActionMessage() const {
     });
   }
 
+  act::MutexLock lock(&mu_);
   return {
       .id = id_,
       .name = schema_.name,
       .inputs = input_parameters,
       .outputs = output_parameters,
+      .headers = headers_,
   };
 }
 
@@ -242,7 +249,8 @@ absl::Status Action::Await(absl::Duration timeout) {
       "after Run() or Call() has been invoked.");
 }
 
-absl::Status Action::Call() {
+absl::Status Action::Call(
+    absl::flat_hash_map<std::string, std::string> wire_message_headers) {
   act::MutexLock lock(&mu_);
   bind_streams_on_inputs_default_ = true;
   bind_streams_on_outputs_default_ = false;
@@ -251,12 +259,28 @@ absl::Status Action::Call() {
   if (WireStream* stream = stream_; stream != nullptr) {
     mu_.unlock();
     absl::Status status =
-        stream->Send(WireMessage{.actions = {GetActionMessage()}});
+        stream->Send(WireMessage{.actions = {GetActionMessage()},
+                                 .headers = std::move(wire_message_headers)});
     mu_.lock();
     return status;
   }
 
   return absl::OkStatus();
+}
+
+absl::StatusOr<absl::Status> Action::CallAndWaitForDispatchStatus(
+    absl::flat_hash_map<std::string, std::string> wire_message_headers) {
+  RETURN_IF_ERROR(Call(std::move(wire_message_headers)));
+  act::MutexLock lock(&mu_);
+  AsyncNode* dispatch_status_node =
+      GetOutputInternal("__dispatch_status__", /*bind_stream=*/false);
+
+  mu_.unlock();
+  absl::StatusOr<absl::Status> dispatch_status =
+      dispatch_status_node->ConsumeAs<absl::Status>();
+  mu_.lock();
+
+  return dispatch_status;
 }
 
 absl::Status Action::Run() {
@@ -383,11 +407,11 @@ bool Action::Cancelled() const {
 }
 
 std::string Action::GetInputId(const std::string_view name) const {
-  return absl::StrCat(id_, "#", name);
+  return Action::MakeNodeId(id_, name);
 }
 
 std::string Action::GetOutputId(const std::string_view name) const {
-  return absl::StrCat(id_, "#", name);
+  return Action::MakeNodeId(id_, name);
 }
 
 AsyncNode* absl_nullable Action::GetOutputInternal(
@@ -396,14 +420,15 @@ AsyncNode* absl_nullable Action::GetOutputInternal(
     return nullptr;
   }
 
-  if (!output_name_to_id_.contains(name) && name != "__status__") {
+  if (!output_name_to_id_.contains(name) && name != "__status__" &&
+      name != "__dispatch_status__") {
     return nullptr;
   }
 
   AsyncNode* node = node_map_->Get(GetOutputId(name));
   if (stream_ != nullptr &&
       bind_stream.value_or(bind_streams_on_outputs_default_) &&
-      name != "__status__") {
+      name != "__status__" && name != "__dispatch_status__") {
     absl::flat_hash_map<std::string, WireStream*> peers;
     peers.insert({std::string(stream_->GetId()), stream_});
     node->GetWriter().BindPeers(std::move(peers));
@@ -427,7 +452,7 @@ ActionRegistry* absl_nullable Action::GetRegistry() const {
   act::MutexLock lock(&mu_);
   return registry_ != nullptr
              ? registry_
-             : (session_ != nullptr ? session_->GetActionRegistry() : nullptr);
+             : (session_ != nullptr ? session_->action_registry() : nullptr);
 }
 
 absl::StatusOr<std::unique_ptr<Action>> Action::MakeActionInSameSession(

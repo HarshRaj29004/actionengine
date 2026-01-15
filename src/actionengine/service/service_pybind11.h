@@ -188,7 +188,7 @@ class PyWireStream final : public WireStream {
     }
   }
 
-  void Abort() override {
+  void Abort(absl::Status status) override {
     py::gil_scoped_acquire gil;
     const py::function function = py::get_override(this, "abort");
 

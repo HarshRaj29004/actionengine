@@ -159,7 +159,7 @@ class WebRtcWireStream final : public WireStream {
     HalfCloseInternal().IgnoreError();
   }
 
-  void Abort() override;
+  void Abort(absl::Status) override;
 
   absl::Status GetStatus() const override;
 

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <absl/status/statusor.h>
+#include <absl/strings/match.h>
 #include <boost/json/object.hpp>               // NOLINT
 #include <boost/json/serialize.hpp>            // NOLINT
 #include <boost/json/string.hpp>               // NOLINT
@@ -128,6 +129,10 @@ std::vector<std::string> ActionRegistry::ListRegisteredActions() const {
   std::vector<std::string> names;
   names.reserve(schemas_.size());
   for (const auto& [name, _] : schemas_) {
+    // Skip internal actions.
+    if (absl::StartsWith(name, "__")) {
+      continue;
+    }
     names.push_back(name);
   }
   return names;

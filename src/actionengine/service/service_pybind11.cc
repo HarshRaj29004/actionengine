@@ -141,16 +141,16 @@ void BindSession(py::handle scope, std::string_view name) {
       .def(
           "get_node_map",
           [](const std::shared_ptr<Session>& self) {
-            return ShareWithNoDeleter(self->GetNodeMap());
+            return ShareWithNoDeleter(self->node_map());
           },
           py::call_guard<py::gil_scoped_release>())
       .def(
           "get_action_registry",
           [](const std::shared_ptr<Session>& self) {
-            return ShareWithNoDeleter(self->GetActionRegistry());
+            return ShareWithNoDeleter(self->action_registry());
           },
           py::call_guard<py::gil_scoped_release>())
-      .def("set_action_registry", &Session::SetActionRegistry,
+      .def("set_action_registry", &Session::set_action_registry,
            py::arg("action_registry"),
            py::call_guard<py::gil_scoped_release>());
 }

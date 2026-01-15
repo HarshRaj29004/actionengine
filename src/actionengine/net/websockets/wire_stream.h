@@ -71,7 +71,7 @@ class WebsocketWireStream final : public WireStream {
 
   void HalfClose() override;
 
-  void Abort() override;
+  void Abort(absl::Status status) override;
 
   absl::Status GetStatus() const override { return status_; }
 

@@ -40,6 +40,7 @@
 #include <utility>
 #include <vector>
 
+#include <absl/container/flat_hash_map.h>
 #include <absl/log/log.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
@@ -183,6 +184,11 @@ struct is_map<std::map<T, Alloc>> {
 
 template <class T, class Alloc>
 struct is_map<std::unordered_map<T, Alloc>> {
+  static constexpr bool value = true;
+};
+
+template <class T, class Alloc>
+struct is_map<absl::flat_hash_map<T, Alloc>> {
   static constexpr bool value = true;
 };
 

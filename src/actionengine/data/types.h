@@ -34,6 +34,7 @@
 #include <absl/log/log.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
+#include <absl/strings/escaping.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
 #include <absl/time/time.h>
@@ -321,7 +322,9 @@ void AbslStringify(Sink& sink, const ChunkMetadata& metadata) {
   if (!metadata.attributes.empty()) {
     sink.Append("attributes:\n");
     for (const auto& [key, value] : metadata.attributes) {
-      sink.Append(internal::Indent(absl::StrCat(key, ": ", value), 2, true));
+      sink.Append(internal::Indent(
+          absl::StrCat(key, ": \"", absl::Utf8SafeCEscape(value), "\""), 2,
+          true));
     }
   }
 }
@@ -333,7 +336,7 @@ void AbslStringify(Sink& sink, const Chunk& chunk) {
                  internal::Indent(absl::StrCat(*chunk.metadata), 2, true));
   }
   if (!chunk.data.empty() || (chunk.data.empty() && chunk.ref.empty())) {
-    absl::Format(&sink, "data: %s\n", chunk.data);
+    absl::Format(&sink, "data: \"%s\"\n", absl::Utf8SafeCEscape(chunk.data));
   }
   if (!chunk.ref.empty()) {
     absl::Format(&sink, "ref: %s\n", chunk.ref);
@@ -404,6 +407,16 @@ void AbslStringify(Sink& sink, const ActionMessage& action) {
                    internal::Indent(absl::StrCat(output), 2, true));
     }
   }
+  if (!action.headers.empty()) {
+    sink.Append("headers:\n");
+    for (const auto& [key, value] : action.headers) {
+      absl::Format(
+          &sink, "%s\n",
+          internal::Indent(
+              absl::StrCat(key, ": \"", absl::Utf8SafeCEscape(value), "\""), 2,
+              true));
+    }
+  }
 }
 
 template <typename Sink>
@@ -411,6 +424,16 @@ void AbslStringify(Sink& sink, const WireMessage& message) {
   if (message.node_fragments.empty() && message.actions.empty()) {
     sink.Append("<empty>\n");
     return;
+  }
+  if (!message.headers.empty()) {
+    sink.Append("headers:\n");
+    for (const auto& [key, value] : message.headers) {
+      absl::Format(
+          &sink, "%s\n",
+          internal::Indent(
+              absl::StrCat(key, ": \"", absl::Utf8SafeCEscape(value), "\""), 2,
+              true));
+    }
   }
   if (!message.node_fragments.empty()) {
     sink.Append("node_fragments: \n");

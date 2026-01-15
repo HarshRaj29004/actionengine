@@ -14,7 +14,13 @@
  * limitations under the License.
  */
 
-import { encode, decode, decodeAsync, decodeMulti } from '@msgpack/msgpack';
+import {
+  encode,
+  decode,
+  decodeAsync,
+  decodeMulti,
+  Decoder,
+} from '@msgpack/msgpack';
 import {
   Chunk,
   ChunkMetadata,
@@ -276,11 +282,25 @@ export const encodeActionMessage = (message: ActionMessage) => {
   const encodedName = encode(message.name || '');
   const encodedInputs = encode((message.inputs || []).map(encodePort));
   const encodedOutputs = encode((message.outputs || []).map(encodePort));
+
+  const headers = message.headers || new Map<string, Uint8Array>();
+  const encodedHeaderParts = [];
+  encodedHeaderParts.push(encode(headers.size));
+  for (const [key, value] of headers) {
+    encodedHeaderParts.push(encode(key));
+    encodedHeaderParts.push(encode(value));
+  }
+  const encodedHeaderLength = encodedHeaderParts.reduce(
+    (sum, part) => sum + part.length,
+    0,
+  );
+
   const bytes = new Uint8Array(
     encodedId.length +
       encodedName.length +
       encodedInputs.length +
-      encodedOutputs.length,
+      encodedOutputs.length +
+      encodedHeaderLength,
   );
   let offset = 0;
   bytes.set(encodedId, offset);
@@ -290,11 +310,50 @@ export const encodeActionMessage = (message: ActionMessage) => {
   bytes.set(encodedInputs, offset);
   offset += encodedInputs.length;
   bytes.set(encodedOutputs, offset);
+  offset += encodedOutputs.length;
+  for (const part of encodedHeaderParts) {
+    bytes.set(part, offset);
+    offset += part.length;
+  }
+
   return bytes;
 };
 
 export const decodeActionMessage = (bytes: Uint8Array): ActionMessage => {
-  const [id, name, inputs, outputs] = decodeMulti(bytes) as unknown as [
+  const decoder = new Decoder();
+  const parts = decoder.decodeMulti(bytes) as unknown as [
+    string,
+    string,
+    Uint8Array[],
+    Uint8Array[],
+    ...unknown[],
+  ];
+
+  let offset = 5; // Skip first, constant space parts (id, name, inputs, outputs, headerCount)
+  const statedHeaderCount = parts[offset - 1] as number;
+  const actualHeaderKVCount = parts.length - 5;
+
+  if (actualHeaderKVCount % 2 !== 0) {
+    throw new Error(
+      `Malformed headers in ActionMessage: expected key-value pairs but got an odd number of elements`,
+    );
+  }
+
+  if (actualHeaderKVCount !== 2 * statedHeaderCount) {
+    const actualHeaderCountInt = Math.floor(actualHeaderKVCount / 2);
+    throw new Error(
+      `Header count mismatch in ActionMessage: stated ${statedHeaderCount}, actual ${actualHeaderCountInt}`,
+    );
+  }
+
+  const headers = new Map<string, Uint8Array<ArrayBuffer>>();
+  for (let i = 0; i < statedHeaderCount; i++) {
+    const key = parts[offset + 2 * i] as string;
+    const value = parts[offset + 2 * i + 1] as Uint8Array<ArrayBuffer>;
+    headers.set(key, value);
+  }
+
+  const [id, name, inputs, outputs] = parts.slice(0, 4) as [
     string,
     string,
     Uint8Array[],
@@ -305,6 +364,7 @@ export const decodeActionMessage = (bytes: Uint8Array): ActionMessage => {
     name,
     inputs: inputs.map(decodePort),
     outputs: outputs.map(decodePort),
+    headers: headers ? headers : undefined,
   };
 };
 
@@ -316,11 +376,28 @@ export const encodeWireMessage = (message: WireMessage) => {
     (message.actions || []).map(encodeActionMessage),
   );
 
+  const headers = message.headers || new Map<string, Uint8Array>();
+  const packedHeaderParts = [];
+  packedHeaderParts.push(encode(headers.size));
+  for (const [key, value] of headers) {
+    packedHeaderParts.push(encode(key));
+    packedHeaderParts.push(encode(value));
+  }
+  const packedHeaderLength = packedHeaderParts.reduce(
+    (sum, part) => sum + part.length,
+    0,
+  );
+
   const packedMessage = new Uint8Array(
-    packedNodeFragments.length + packedActions.length,
+    packedNodeFragments.length + packedActions.length + packedHeaderLength,
   );
   packedMessage.set(packedNodeFragments, 0);
   packedMessage.set(packedActions, packedNodeFragments.length);
+  let offset = packedNodeFragments.length + packedActions.length;
+  for (const part of packedHeaderParts) {
+    packedMessage.set(part, offset);
+    offset += part.length;
+  }
   return encode(packedMessage);
 };
 
@@ -328,12 +405,37 @@ export const decodeWireMessage = async (
   bytes: Blob | Uint8Array,
 ): Promise<WireMessage> => {
   const unpackedMessage = (await rawDecode(bytes)) as Uint8Array;
-  // @ts-expect-error decodeMulti is not strictly typed
-  const [packedNodeFragments, packedActions]: [Uint8Array[], Uint8Array[]] =
-    decodeMulti(unpackedMessage);
+  const [packedNodeFragments, packedActions, statedHeaderCount, ...rest] =
+    decodeMulti(unpackedMessage) as unknown as [
+      Uint8Array[],
+      Uint8Array[],
+      number,
+      ...unknown[],
+    ];
+
+  const actualHeaderKVCount = rest.length;
+  if (actualHeaderKVCount % 2 !== 0) {
+    throw new Error(
+      `Malformed headers in WireMessage: expected key-value pairs but got an odd number of elements`,
+    );
+  }
+
+  if (actualHeaderKVCount !== 2 * statedHeaderCount) {
+    const actualHeaderCountInt = Math.floor(actualHeaderKVCount / 2);
+    throw new Error(
+      `Header count mismatch in WireMessage: stated ${statedHeaderCount}, actual ${actualHeaderCountInt}`,
+    );
+  }
+
+  const headers = new Map<string, Uint8Array<ArrayBuffer>>();
+  for (let i = 0; i < statedHeaderCount; i++) {
+    const key = rest[2 * i] as string;
+    const value = rest[2 * i + 1] as Uint8Array<ArrayBuffer>;
+    headers.set(key, value);
+  }
 
   const nodeFragments = packedNodeFragments.map(decodeNodeFragment);
   const actions = packedActions.map(decodeActionMessage);
 
-  return { nodeFragments, actions };
+  return { nodeFragments, actions, headers: headers ? headers : undefined };
 };

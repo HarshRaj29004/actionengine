@@ -132,9 +132,9 @@ absl::StatusOr<std::string> CallEcho(
     const std::shared_ptr<WireStream>& stream) {
 
   ASSIGN_OR_RETURN(const std::unique_ptr<Action> echo,
-                   session->GetActionRegistry()->MakeAction(
+                   session->action_registry()->MakeAction(
                        /*name=*/"echo"));
-  echo->BindNodeMap(session->GetNodeMap());
+  echo->BindNodeMap(session->node_map());
   echo->BindSession(session);
   echo->BindStream(stream.get());
 
@@ -193,9 +193,10 @@ absl::Status Main(int argc, char** argv) {
   act::Session session(&node_map, &action_registry);
   std::string identity = act::GenerateUUID4();
   LOG(INFO) << "Identity: " << identity;
-  ASSIGN_OR_RETURN(std::shared_ptr<act::WireStream> stream,
-                   act::net::StartStreamWithSignalling(
-                       identity, "server", "wss://actionengine.dev:19001"));
+  ASSIGN_OR_RETURN(
+      std::shared_ptr<act::WireStream> stream,
+      act::net::StartStreamWithSignalling(identity, "echo-server-1",
+                                          "wss://actionengine.dev:19001"));
 
   session.DispatchFrom(stream);
 

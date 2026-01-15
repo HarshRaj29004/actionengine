@@ -180,13 +180,34 @@ class Action(_C.actions.Action):
     async def wait_until_complete(self):
         return await asyncio.to_thread(super().wait_until_complete)
 
-    async def call(self) -> None:
+    async def call(
+        self, wire_message_headers: dict[str, bytes] | None = None
+    ) -> None:
         """Calls the action by sending the action message to the stream."""
-        await asyncio.to_thread(self.call_sync)
+        await asyncio.to_thread(self.call_sync, wire_message_headers)
 
-    def call_sync(self) -> None:
+    async def call_and_wait_for_dispatch_status(
+        self, wire_message_headers: dict[str, bytes] | None = None
+    ) -> None:
+        """Calls the action and waits for the dispatch status."""
+        await asyncio.to_thread(
+            self.call_and_wait_for_dispatch_status_sync,
+            wire_message_headers,
+        )
+
+    def call_sync(
+        self,
+        wire_message_headers: dict[str, bytes] | None = None,
+    ) -> None:
         """Calls the action by sending the action message to the stream."""
-        super().call()
+        super().call(wire_message_headers)
+
+    def call_and_wait_for_dispatch_status_sync(
+        self,
+        wire_message_headers: dict[str, bytes] | None = None,
+    ) -> None:
+        """Calls the action and waits for the dispatch status synchronously."""
+        super().call_and_wait_for_dispatch_status(wire_message_headers)
 
     def get_registry(self) -> ActionRegistry:
         """Returns the action registry from attached session."""

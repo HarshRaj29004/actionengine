@@ -6,6 +6,7 @@ add_library(
 
 target_link_libraries(cppack
         PRIVATE
+        absl::flat_hash_map
         absl::status
         absl::statusor
 )

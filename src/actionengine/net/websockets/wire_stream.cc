@@ -97,25 +97,27 @@ absl::StatusOr<std::optional<WireMessage>> WebsocketWireStream::Receive(
     return unpacked.status();
   }
 
-  // Empty WireMessage indicates a half-close.
   if (unpacked->actions.empty() && unpacked->node_fragments.empty()) {
-    // If the message is empty, it means the stream was half-closed by the
-    // other end, or the other end has acknowledged our half-close.
-
-    if (half_closed_) {
-      // We initiated the half-close, so we don't need to call the
-      // half-close callback, only to acknowledge
-      return std::nullopt;
-    }
-
-    if (absl::Status half_close_status = HalfCloseInternal();
-        !half_close_status.ok()) {
-      return half_close_status;
-    }
-
-    // If we reach here, it means we have successfully half-closed the stream
-    // in response to the other end's half-close message.
     return std::nullopt;
+  }
+
+  for (const auto& fragment : unpacked->node_fragments) {
+    if (fragment.id == "__abort__") {
+      closed_ = true;
+      if (!std::holds_alternative<Chunk>(fragment.data)) {
+        status_ = absl::InternalError(
+            "Received abort fragment with invalid data type. Aborting anyway.");
+        return status_;
+      }
+      absl::StatusOr<absl::Status> abort_status_or =
+          ConvertTo<absl::Status>(std::get<Chunk>(fragment.data));
+      if (!abort_status_or.ok()) {
+        status_ = abort_status_or.status();
+      } else {
+        status_ = *abort_status_or;
+      }
+      return status_;
+    }
   }
 
   return *std::move(unpacked);
@@ -136,17 +138,23 @@ void WebsocketWireStream::HalfClose() {
   HalfCloseInternal().IgnoreError();
 }
 
-void WebsocketWireStream::Abort() {
+void WebsocketWireStream::Abort(absl::Status status) {
   act::MutexLock lock(&mu_);
-  if (closed_) {
+  if (closed_ || half_closed_) {
     return;
   }
 
-  // TODO: communicate an -unsuccessful- close instead.
-  HalfCloseInternal().IgnoreError();
+  SendInternal(WireMessage{.node_fragments = {{
+                               .id = "__abort__",
+                               .data = ConvertTo<Chunk>(status).value(),
+                               .seq = 0,
+                               .continued = false,
+                           }}})
+      .IgnoreError();
 
   stream_.CancelRead();
   closed_ = true;
+  half_closed_ = true;
   status_ = absl::CancelledError("WebsocketWireStream aborted");
 }
 

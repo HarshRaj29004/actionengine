@@ -502,46 +502,45 @@ absl::StatusOr<std::optional<WireMessage>> WebRtcWireStream::Receive(
   }
 
   if (message.actions.empty() && message.node_fragments.empty()) {
-    // If the message is empty, it means the stream was half-closed by the
-    // other end, or the other end has acknowledged our half-close.
-
-    // Check this because we might have already closed the channel due to
-    // an error or onClosed() for the underlying data channel.
-    if (!closed_) {
-      recv_channel_.writer()->Close();
-      closed_ = true;
-
-      WireMessage ignored;
-      while (recv_channel_.reader()->Read(&ignored)) {
-        // Drain any remaining messages: after half-close, we should not
-        // receive any more messages, but if we do, just ignore them.
-      }
-    }
-
-    if (half_closed_) {
-      // We initiated the half-close, so we don't need to call the
-      // half-close callback, only to acknowledge
-      return std::nullopt;
-    }
-
-    if (absl::Status half_close_status = HalfCloseInternal();
-        !half_close_status.ok()) {
-      return half_close_status;
-    }
-
     return std::nullopt;
+  }
+
+  for (const auto& fragment : message.node_fragments) {
+    if (fragment.id == "__abort__") {
+      closed_ = true;
+      if (!std::holds_alternative<Chunk>(fragment.data)) {
+        status_ = absl::InternalError(
+            "Received abort fragment with invalid data type. Aborting anyway.");
+        return status_;
+      }
+      absl::StatusOr<absl::Status> abort_status_or =
+          ConvertTo<absl::Status>(std::get<Chunk>(fragment.data));
+      if (!abort_status_or.ok()) {
+        status_ = abort_status_or.status();
+      } else {
+        status_ = *abort_status_or;
+      }
+      return status_;
+    }
   }
 
   return message;
 }
 
-void WebRtcWireStream::Abort() {
+void WebRtcWireStream::Abort(absl::Status status) {
   act::MutexLock lock(&mu_);
-  if (closed_) {
+  if (closed_ || half_closed_) {
     return;
   }
-  // TODO: communicate an -aborted- status to the other end.
-  HalfCloseInternal().IgnoreError();
+
+  SendInternal(WireMessage{.node_fragments = {{
+                               .id = "__abort__",
+                               .data = ConvertTo<Chunk>(status).value(),
+                               .seq = 0,
+                               .continued = false,
+                           }}})
+      .IgnoreError();
+
   CloseOnError(absl::CancelledError("WebRtcWireStream aborted"));
 }
 
@@ -566,10 +565,11 @@ void WebRtcWireStream::CloseOnError(absl::Status status)
   LOG(ERROR) << "WebRtcWireStream error: " << status.message();
 
   if (!closed_) {
-    status_ = std::move(status);
+    status_.Update(std::move(status));
     recv_channel_.writer()->Close();
   }
 
+  half_closed_ = true;
   closed_ = true;
   cv_.SignalAll();
 }

@@ -51,6 +51,9 @@ PYBIND11_MODULE(_C, m) {
     py::google::internal::CheckStatusModuleImported();
   }
 
+  py::bind_map<absl::flat_hash_map<std::string, std::string>>(m,
+                                                              "AbslStringMap");
+
   py::module_ data = pybindings::MakeDataModule(m, "data");
 
   py::module_ chunk_store = pybindings::MakeChunkStoreModule(m, "chunk_store");

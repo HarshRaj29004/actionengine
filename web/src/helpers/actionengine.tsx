@@ -96,12 +96,18 @@ export const useWebRtcStream = (identity: string, params: WebRtcParams) => {
         await stream.close()
       }
 
+      if (!params.peer) {
+        setStream(null)
+        return
+      }
+
       const newStream = new WebRtcActionEngineStream(
         params.signallingHost,
         identity,
         params.peer,
         params.turnIceServer,
       )
+      console.log('Connecting to WebRTC peer:', params.peer)
 
       await newStream.waitUntilReady()
       if (cancelled) {

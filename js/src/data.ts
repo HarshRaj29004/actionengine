@@ -57,11 +57,13 @@ export interface ActionMessage {
   name: string;
   inputs: Port[];
   outputs: Port[];
+  headers?: Map<string, Uint8Array<ArrayBuffer>>;
 }
 
 export interface WireMessage {
   nodeFragments?: NodeFragment[];
   actions?: ActionMessage[];
+  headers?: Map<string, Uint8Array<ArrayBuffer>>;
 }
 
 const getEmptyArray = () => {

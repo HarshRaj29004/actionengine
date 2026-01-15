@@ -290,11 +290,13 @@ void WebRtcServer::RunLoop() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     absl::StatusOr<WebRtcDataChannelConnection> next_connection_or;
     bool channel_open;
 
+    // LOG(INFO) << "WebRtcServer waiting for new connections...";
     mu_.unlock();
     const int selected = thread::Select(
         {channel_reader->OnRead(&next_connection_or, &channel_open),
          signalling_client->OnError(), thread::OnCancel()});
     mu_.lock();
+    // LOG(INFO) << "WebRtcServer woke up from wait.";
 
     // Check if our fiber has been cancelled, which means we should stop.
     if (thread::Cancelled()) {
@@ -357,6 +359,9 @@ void WebRtcServer::RunLoop() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     auto stream = std::make_unique<WebRtcWireStream>(
         std::move(next_connection.data_channel),
         std::move(next_connection.connection));
+
+    // DLOG(INFO) << "WebRtcServer received a new connection, "
+    //               "establishing with the service...";
 
     if (auto service_connection =
             service_->EstablishConnection(std::move(stream));

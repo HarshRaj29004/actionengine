@@ -18,7 +18,8 @@
 #include <actionengine/service/service.h>
 
 ABSL_FLAG(uint16_t, port, 20000, "Port to bind to.");
-ABSL_FLAG(std::string, identity, "server", "WebRTC signalling identity.");
+ABSL_FLAG(std::string, identity, "echo-server-1",
+          "WebRTC signalling identity.");
 
 // Simply some type aliases to make the code more readable.
 using Action = act::Action;
@@ -79,7 +80,7 @@ int main(int argc, char** argv) {
                                 "wss://actionengine.dev:19001");
   // act::net::WebsocketServer server(&service, "0.0.0.0", port);
   server.Run();
-  server.Join().IgnoreError();
+  CHECK_OK(server.Join());
 
   return 0;
 }

@@ -96,10 +96,11 @@ ActionHandler MakeStatusAwareActionHandler(py::handle py_handler) {
         future.attr("add_done_callback")(std::move(future_done_callback));
         {
           py::gil_scoped_release release;
-          thread::Select({done.OnEvent(), thread::OnCancel()});
+          thread::Select(
+              {done.OnEvent(), thread::OnCancel(), action->OnCancel()});
         }
 
-        const bool cancelled = thread::Cancelled();
+        const bool cancelled = thread::Cancelled() || action->Cancelled();
         // If we were cancelled, we need to cancel the future.
         if (cancelled) {
           auto _ = future.attr("cancel")();
@@ -113,7 +114,7 @@ ActionHandler MakeStatusAwareActionHandler(py::handle py_handler) {
           py::gil_scoped_release release;
           thread::SelectUntil(deadline, {done.OnEvent()});
         }
-        if (thread::Cancelled()) {
+        if (cancelled) {
           return absl::CancelledError(
               "Action handler was cancelled while waiting for the "
               "coroutine.");
@@ -121,7 +122,11 @@ ActionHandler MakeStatusAwareActionHandler(py::handle py_handler) {
 
         // At this point, the future is done, but it might have failed.
         // If it failed, this will catch and propagate the exception.
-        auto _ = future.attr("result")();
+        try {
+          auto _ = future.attr("result")();
+        } catch (py::error_already_set& e) {
+          return absl::InternalError(absl::StrCat(e.what()));
+        }
 
         return absl::OkStatus();
       }
@@ -228,25 +233,73 @@ void BindActionRegistry(py::handle scope, std::string_view name) {
 }
 
 void BindAction(py::handle scope, std::string_view name) {
-  py::classh<Action>(scope, std::string(name).c_str(),
-                     py::release_gil_before_calling_cpp_dtor())
-      .def(MakeSameObjectRefConstructor<Action>(), py::keep_alive<0, 1>())
-      .def(py::init([](ActionSchema schema, std::string_view id = "") {
-        return std::make_shared<Action>(std::move(schema), id);
-      }))
-      .def(
-          "run",
-          [](const std::shared_ptr<Action>& action)
-              -> absl::StatusOr<std::shared_ptr<Action>> {
-            RETURN_IF_ERROR(action->Run());
-            return action;
-          },
-          pybindings::keep_event_loop_memo(),
-          py::call_guard<py::gil_scoped_release>())
+  auto cls =
+      py::classh<Action>(scope, std::string(name).c_str(),
+                         py::release_gil_before_calling_cpp_dtor())
+          .def(MakeSameObjectRefConstructor<Action>(), py::keep_alive<0, 1>())
+          .def(py::init([](ActionSchema schema, std::string_view id = "") {
+            return std::make_shared<Action>(std::move(schema), id);
+          }));
+  cls.def(
+         "run",
+         [](const std::shared_ptr<Action>& action)
+             -> absl::StatusOr<std::shared_ptr<Action>> {
+           RETURN_IF_ERROR(action->Run());
+           return action;
+         },
+         pybindings::keep_event_loop_memo(),
+         py::call_guard<py::gil_scoped_release>())
       .def(
           "call",
-          [](const std::shared_ptr<Action>& action) { return action->Call(); },
-          py::call_guard<py::gil_scoped_release>())
+          [](const std::shared_ptr<Action>& action, py::handle headers_obj) {
+            absl::flat_hash_map<std::string, std::string> headers;
+            if (!headers_obj.is_none()) {
+              try {
+                headers =
+                    py::cast<absl::flat_hash_map<std::string, std::string>>(
+                        headers_obj);
+              } catch (const py::cast_error& e) {
+                return absl::InvalidArgumentError(
+                    absl::StrCat("Failed to cast headers to "
+                                 "Dict[str, str]: ",
+                                 e.what()));
+              }
+            }
+            {
+              py::gil_scoped_release release;
+              return action->Call(std::move(headers));
+            }
+          },
+          py::arg("headers") = py::none())
+      .def(
+          "call_and_wait_for_dispatch_status",
+          [](const std::shared_ptr<Action>& action,
+             py::handle headers_obj) -> absl::StatusOr<absl::Status> {
+            absl::flat_hash_map<std::string, std::string> headers;
+            if (!headers_obj.is_none()) {
+              try {
+                headers =
+                    py::cast<absl::flat_hash_map<std::string, std::string>>(
+                        headers_obj);
+              } catch (const py::cast_error& e) {
+                return absl::InvalidArgumentError(
+                    absl::StrCat("Failed to cast headers to "
+                                 "Dict[str, str]: ",
+                                 e.what()));
+              }
+            }
+            absl::StatusOr<absl::Status> dispatch_status_or;
+            {
+              py::gil_scoped_release release;
+              dispatch_status_or =
+                  action->CallAndWaitForDispatchStatus(std::move(headers));
+            }
+            if (!dispatch_status_or.ok()) {
+              return dispatch_status_or.status();
+            }
+            return *dispatch_status_or;
+          },
+          py::arg("headers") = py::none())
       .def(
           "wait_until_complete",
           [](const std::shared_ptr<Action>& action) { return action->Await(); },
@@ -271,6 +324,13 @@ void BindAction(py::handle scope, std::string_view name) {
           py::call_guard<py::gil_scoped_release>())
       .def("cancelled", &Action::Cancelled,
            py::call_guard<py::gil_scoped_release>())
+      .def(
+          "get_action_message",
+          [](const std::shared_ptr<Action>& action)
+              -> absl::StatusOr<ActionMessage> {
+            return action->GetActionMessage();
+          },
+          py::call_guard<py::gil_scoped_release>())
       .def("get_registry",
            [](const std::shared_ptr<Action>& action) {
              return ShareWithNoDeleter(action->GetRegistry());
@@ -343,7 +403,65 @@ void BindAction(py::handle scope, std::string_view name) {
           [](const std::shared_ptr<Action>& self, NodeMap* node_map) {
             self->BindNodeMap(node_map);
           },
-          py::arg("node_map"));
+          py::arg("node_map"))
+      .def("headers",
+           [](const std::shared_ptr<Action>& self) {
+             return py::make_key_iterator(self->headers().begin(),
+                                          self->headers().end());
+           })
+      .def(
+          "get_header",
+          [](const std::shared_ptr<Action>& self, std::string_view key,
+             bool decode = false) -> std::optional<py::object> {
+            const std::optional<std::string_view> header =
+                self->get_header(key);
+            if (!header) {
+              return std::nullopt;
+            }
+
+            py::object value = py::bytes(std::string(*header));
+            if (decode) {
+              value =
+                  py::cast<py::str>(value.attr("decode")("utf-8", "strict"));
+            }
+            return value;
+          },
+          py::arg("key"), py::arg_v("decode", false))
+      .def(
+          "set_header",
+          [](const std::shared_ptr<Action>& self, py::handle py_key,
+             py::handle py_value) -> absl::Status {
+            std::string key, value;
+            try {
+              const auto py_key_str = py::cast<py::str>(py_key);
+              key = py_key_str.attr("encode")("utf-8").cast<std::string>();
+            } catch (const py::cast_error& e) {
+              return absl::InvalidArgumentError(
+                  absl::StrCat("Failed to cast header key to str: ", e.what()));
+            }
+
+            py::bytes py_value_bytes;
+            if (py::isinstance<py::bytes>(py_value)) {
+              py_value_bytes = py::cast<py::bytes>(py_value);
+            } else if (py::isinstance<py::str>(py_value)) {
+              const auto py_value_str = py::cast<py::str>(py_value);
+              py_value_bytes = py::bytes(
+                  py_value_str.attr("encode")("utf-8").cast<std::string>());
+            } else {
+              return absl::InvalidArgumentError(
+                  "Header value must be either bytes or str.");
+            }
+            value = std::string(py_value_bytes);
+
+            return self->set_header(key, value);
+          },
+          py::arg("key"), py::arg("value"))
+      .def(
+          "remove_header",
+          [](const std::shared_ptr<Action>& self, std::string_view key) {
+            return self->remove_header(key);
+          },
+          py::arg("key"));
 }
 
 py::module_ MakeActionsModule(py::module_ scope, std::string_view module_name) {

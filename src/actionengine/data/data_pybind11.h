@@ -20,6 +20,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
+#include <pybind11_abseil/absl_casters.h>
 #include <pybind11_abseil/status_caster.h>
 #include <pybind11_abseil/statusor_caster.h>
 
@@ -29,6 +30,7 @@
 
 PYBIND11_MAKE_OPAQUE(std::vector<act::Port>);
 PYBIND11_MAKE_OPAQUE(std::vector<act::NodeFragment>);
+PYBIND11_MAKE_OPAQUE(absl::flat_hash_map<std::string, std::string>);
 PYBIND11_MAKE_OPAQUE(std::vector<act::ActionMessage>);
 
 namespace act {

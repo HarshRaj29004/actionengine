@@ -181,6 +181,11 @@ absl::Status EgltAssignInto(act::ActionMessage from,
     *to->mutable_outputs()->Add() = std::move(converted_port);
   }
 
+  to->clear_headers();
+  for (auto& [key, value] : std::move(from.headers)) {
+    (*to->mutable_headers())[key] = std::move(value);
+  }
+
   return absl::OkStatus();
 }
 
@@ -197,6 +202,10 @@ absl::Status EgltAssignInto(act::proto::ActionMessage from,
     ASSIGN_OR_RETURN(auto converted_port,
                      ConvertTo<act::Port>(std::move(port)));
     to->outputs.push_back(std::move(converted_port));
+  }
+  to->headers.clear();
+  for (auto& [key, value] : *from.mutable_headers()) {
+    to->headers[key] = std::move(value);
   }
   return absl::OkStatus();
 }
@@ -218,6 +227,30 @@ absl::Status EgltAssignInto(act::WireMessage from,
     *to->mutable_node_fragments()->Add() = std::move(converted_fragment);
   }
 
+  to->clear_headers();
+  for (auto& [key, value] : std::move(from.headers)) {
+    (*to->mutable_headers())[key] = std::move(value);
+  }
+
+  return absl::OkStatus();
+}
+
+absl::Status EgltAssignInto(act::proto::WireMessage from,
+                            act::WireMessage* to) {
+  for (auto& action : *from.mutable_actions()) {
+    ASSIGN_OR_RETURN(auto converted_action,
+                     ConvertTo<act::ActionMessage>(std::move(action)));
+    to->actions.push_back(std::move(converted_action));
+  }
+  for (auto& fragment : *from.mutable_node_fragments()) {
+    ASSIGN_OR_RETURN(auto converted_fragment,
+                     ConvertTo<act::NodeFragment>(std::move(fragment)));
+    to->node_fragments.push_back(std::move(converted_fragment));
+  }
+  to->headers.clear();
+  for (auto& [key, value] : *from.mutable_headers()) {
+    to->headers[key] = std::move(value);
+  }
   return absl::OkStatus();
 }
 

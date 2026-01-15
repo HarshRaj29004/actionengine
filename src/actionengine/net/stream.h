@@ -166,7 +166,7 @@ class WireStream {
    * should be an error status, indicating that the stream is no longer usable,
    * and not an empty optional.
    */
-  virtual void Abort() = 0;
+  virtual void Abort(absl::Status status) = 0;
 
   /**
    * Returns the status of the stream.

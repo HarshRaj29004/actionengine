@@ -327,8 +327,68 @@ void BindActionMessage(py::handle scope, std::string_view name) {
            py::arg_v("outputs", std::vector<Port>()))
       .def_readwrite("name", &ActionMessage::name)
       .def_readwrite("id", &ActionMessage::id)
-      .def_readwrite("inputs", &ActionMessage::inputs)
-      .def_readwrite("outputs", &ActionMessage::outputs)
+      .def_readwrite("inputs", &ActionMessage::inputs,
+                     py::return_value_policy::reference)
+      .def_readwrite("outputs", &ActionMessage::outputs,
+                     py::return_value_policy::reference)
+      .def("headers",
+           [](const ActionMessage& self) {
+             return py::make_key_iterator(self.headers.begin(),
+                                          self.headers.end());
+           })
+      .def(
+          "get_header",
+          [](const ActionMessage& self, std::string_view key,
+             bool decode = false) -> std::optional<py::object> {
+            const auto header_it = self.headers.find(key);
+            if (header_it == self.headers.end()) {
+              return std::nullopt;
+            }
+
+            py::object value = py::bytes(header_it->second);
+            if (decode) {
+              value =
+                  py::cast<py::str>(value.attr("decode")("utf-8", "strict"));
+            }
+            return value;
+          },
+          py::arg("key"), py::arg_v("decode", false))
+      .def(
+          "set_header",
+          [](ActionMessage& self, py::handle py_key,
+             py::handle py_value) -> absl::Status {
+            std::string key;
+            try {
+              const auto py_key_str = py::cast<py::str>(py_key);
+              key = py_key_str.attr("encode")("utf-8").cast<std::string>();
+            } catch (const py::cast_error& e) {
+              return absl::InvalidArgumentError(
+                  absl::StrCat("Failed to cast header key to str: ", e.what()));
+            }
+
+            py::bytes py_value_bytes;
+            if (py::isinstance<py::bytes>(py_value)) {
+              py_value_bytes = py::cast<py::bytes>(py_value);
+            } else if (py::isinstance<py::str>(py_value)) {
+              const auto py_value_str = py::cast<py::str>(py_value);
+              py_value_bytes = py::bytes(
+                  py_value_str.attr("encode")("utf-8").cast<std::string>());
+            } else {
+              return absl::InvalidArgumentError(
+                  "Header value must be either bytes or str.");
+            }
+            std::string value = std::string(py_value_bytes);
+
+            self.headers[key] = std::move(value);
+            return absl::OkStatus();
+          },
+          py::arg("key"), py::arg("value"))
+      .def(
+          "remove_header",
+          [](ActionMessage& self, std::string_view key) {
+            self.headers.erase(key);
+          },
+          py::arg("key"))
       .def("__repr__",
            [](const ActionMessage& action) { return absl::StrCat(action); })
       .doc() = "An ActionEngine ActionMessage definition.";
@@ -352,6 +412,64 @@ void BindWireMessage(py::handle scope, std::string_view name) {
                      py::return_value_policy::reference)
       .def_readwrite("actions", &WireMessage::actions,
                      py::return_value_policy::reference)
+      .def("headers",
+           [](const WireMessage& self) {
+             return py::make_key_iterator(self.headers.begin(),
+                                          self.headers.end());
+           })
+      .def(
+          "get_header",
+          [](const WireMessage& self, std::string_view key,
+             bool decode = false) -> std::optional<py::object> {
+            const auto header_it = self.headers.find(key);
+            if (header_it == self.headers.end()) {
+              return std::nullopt;
+            }
+
+            py::object value = py::bytes(header_it->second);
+            if (decode) {
+              value =
+                  py::cast<py::str>(value.attr("decode")("utf-8", "strict"));
+            }
+            return value;
+          },
+          py::arg("key"), py::arg_v("decode", false))
+      .def(
+          "set_header",
+          [](WireMessage& self, py::handle py_key,
+             py::handle py_value) -> absl::Status {
+            std::string key;
+            try {
+              const auto py_key_str = py::cast<py::str>(py_key);
+              key = py_key_str.attr("encode")("utf-8").cast<std::string>();
+            } catch (const py::cast_error& e) {
+              return absl::InvalidArgumentError(
+                  absl::StrCat("Failed to cast header key to str: ", e.what()));
+            }
+
+            py::bytes py_value_bytes;
+            if (py::isinstance<py::bytes>(py_value)) {
+              py_value_bytes = py::cast<py::bytes>(py_value);
+            } else if (py::isinstance<py::str>(py_value)) {
+              const auto py_value_str = py::cast<py::str>(py_value);
+              py_value_bytes = py::bytes(
+                  py_value_str.attr("encode")("utf-8").cast<std::string>());
+            } else {
+              return absl::InvalidArgumentError(
+                  "Header value must be either bytes or str.");
+            }
+            std::string value = std::string(py_value_bytes);
+
+            self.headers[key] = std::move(value);
+            return absl::OkStatus();
+          },
+          py::arg("key"), py::arg("value"))
+      .def(
+          "remove_header",
+          [](WireMessage& self, std::string_view key) {
+            self.headers.erase(key);
+          },
+          py::arg("key"))
       .def("pack_msgpack",
            [](const WireMessage& message) {
              const std::vector<uint8_t> bytes = cppack::Pack(message);

@@ -26,7 +26,7 @@
 
 namespace act::net {
 
-static constexpr std::string_view kVersionString = "Action Engine 0.2.3";
+static constexpr std::string_view kVersionString = "Action Engine 0.3.0";
 static constexpr absl::Duration kDebugWarningTimeout = absl::Seconds(5);
 
 BoostWebsocketStream::BoostWebsocketStream(
@@ -106,7 +106,9 @@ absl::Status PrepareClientStream(
           boost::beast::websocket::request_type& req) mutable {
         req.set(boost::beast::http::field::user_agent,
                 absl::StrCat(kVersionString, "WebsocketWireStream client"));
-        std::move(decorator)(req);
+        if (decorator) {
+          std::move(decorator)(req);
+        }
       }));
   stream->write_buffer_bytes(16);
 

@@ -45,6 +45,11 @@ class ActionContext {
 
   absl::Status Dispatch(std::shared_ptr<Action> action);
 
+  std::vector<std::shared_ptr<Action>> ListRunningActions() const;
+
+  void CancelAction(Action* absl_nonnull action);
+  absl::Status CancelAction(std::string_view action_id);
+
   void CancelContext();
 
   void WaitForActionsToDetach(
@@ -52,6 +57,8 @@ class ActionContext {
       absl::Duration detach_timeout = kActionDetachTimeout);
 
  private:
+  void CancelActionInternal(Action* absl_nonnull action)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
   void CancelContextInternal() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
   std::unique_ptr<thread::Fiber> ExtractActionFiber(Action* absl_nonnull action)
@@ -62,9 +69,10 @@ class ActionContext {
       absl::Duration detach_timeout = kActionDetachTimeout)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
-  act::Mutex mu_;
+  mutable act::Mutex mu_;
   absl::flat_hash_map<Action*, std::unique_ptr<thread::Fiber>> running_actions_
       ABSL_GUARDED_BY(mu_);
+  absl::flat_hash_map<std::string, Action*> actions_by_id_ ABSL_GUARDED_BY(mu_);
   bool cancelled_ ABSL_GUARDED_BY(mu_) = false;
   act::CondVar cv_ ABSL_GUARDED_BY(mu_);
 };
@@ -116,18 +124,27 @@ class Session {
   absl::Status DispatchMessage(WireMessage message,
                                WireStream* absl_nullable stream = nullptr);
 
+  std::vector<std::shared_ptr<Action>> ListRunningActions() const {
+    return action_context_->ListRunningActions();
+  }
+
+  absl::Status CancelAction(std::string_view action_id) const {
+    return action_context_->CancelAction(action_id);
+  }
+
   void StopDispatchingFrom(WireStream* absl_nonnull stream);
   void StopDispatchingFromAll();
 
-  [[nodiscard]] absl::Duration GetRecvTimeout() const { return recv_timeout_; }
+  [[nodiscard]] absl::Duration recv_timeout() const { return recv_timeout_; }
 
-  [[nodiscard]] NodeMap* absl_nullable GetNodeMap() const { return node_map_; }
+  [[nodiscard]] NodeMap* absl_nullable node_map() const { return node_map_; }
 
-  [[nodiscard]] ActionRegistry* absl_nullable GetActionRegistry() const {
+  [[nodiscard]] ActionRegistry* absl_nullable action_registry() const {
     return action_registry_;
   }
 
-  void SetActionRegistry(ActionRegistry* absl_nullable action_registry) {
+  void set_action_registry(ActionRegistry* absl_nullable action_registry) {
+    act::MutexLock lock(&mu_);
     action_registry_ = action_registry;
   }
 
@@ -142,10 +159,20 @@ class Session {
 
   NodeMap* absl_nonnull const node_map_;
   ActionRegistry* absl_nullable action_registry_ = nullptr;
+  ActionRegistry system_action_registry_;
   ChunkStoreFactory chunk_store_factory_;
 
   std::unique_ptr<ActionContext> action_context_ = nullptr;
 };
+
+const ActionSchema& GetListRunningActionsSchema();
+absl::Status ListRunningActionsHandler(const std::shared_ptr<Action>& action);
+
+const ActionSchema& GetCancelActionSchema();
+absl::Status CancelActionHandler(const std::shared_ptr<Action>& action);
+
+const ActionSchema& GetPingActionSchema();
+absl::Status PingActionHandler(const std::shared_ptr<Action>& action);
 
 }  // namespace act
 

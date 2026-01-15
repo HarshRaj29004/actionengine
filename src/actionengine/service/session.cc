@@ -64,6 +64,18 @@ absl::Status ActionContext::Dispatch(std::shared_ptr<Action> action) {
     return absl::CancelledError("Action context is cancelled.");
   }
 
+  if (running_actions_.contains(action.get())) {
+    return absl::FailedPreconditionError(
+        "Action is already running in this context.");
+  }
+
+  std::string action_id = action->GetId();
+  if (actions_by_id_.contains(action_id)) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("An action with ID ", action->GetId(),
+                     " is already running in this context."));
+  }
+
   Action* absl_nonnull action_ptr = action.get();
   running_actions_[action_ptr] =
       thread::NewTree({}, [action = std::move(action), this]() mutable {
@@ -76,9 +88,66 @@ absl::Status ActionContext::Dispatch(std::shared_ptr<Action> action) {
         mu_.lock();
 
         thread::Detach(ExtractActionFiber(action.get()));
+        actions_by_id_.erase(action->GetId());
         cv_.SignalAll();
       });
+  actions_by_id_[action_id] = action_ptr;
 
+  return absl::OkStatus();
+}
+
+std::vector<std::shared_ptr<Action>> ActionContext::ListRunningActions() const {
+  act::MutexLock lock(&mu_);
+  std::vector<std::shared_ptr<Action>> actions;
+  actions.reserve(running_actions_.size());
+  for (const auto& [action_ptr, _] : running_actions_) {
+    actions.push_back(action_ptr->shared_from_this());
+  }
+  return actions;
+}
+
+void ActionContext::CancelAction(Action* action) {
+  act::MutexLock lock(&mu_);
+  CancelActionInternal(action);
+}
+
+void ActionContext::CancelActionInternal(Action* absl_nonnull action)
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+  if (action == nullptr) {
+    return;
+  }
+
+  const auto it = running_actions_.find(action);
+  const auto id_it = actions_by_id_.find(action->GetId());
+
+  if (it == running_actions_.end() && id_it != actions_by_id_.end()) {
+    DLOG(FATAL) << absl::StrFormat(
+        "Inconsistent state: action with ID %v found in actions_by_id_ but not "
+        "in running_actions_.",
+        action->GetId());
+    ABSL_ASSUME(false);
+  }
+
+  if (id_it == actions_by_id_.end() && it != running_actions_.end()) {
+    DLOG(FATAL) << absl::StrFormat(
+        "Inconsistent state: action with ID %v found in running_actions_ but "
+        "not in actions_by_id_.",
+        action->GetId());
+    ABSL_ASSUME(false);
+  }
+
+  action->Cancel();
+  it->second->Cancel();
+}
+
+absl::Status ActionContext::CancelAction(const std::string_view action_id) {
+  act::MutexLock lock(&mu_);
+  const auto id_it = actions_by_id_.find(std::string(action_id));
+  if (id_it == actions_by_id_.end()) {
+    return absl::NotFoundError(
+        absl::StrFormat("No action with ID %v found in context.", action_id));
+  }
+  CancelActionInternal(id_it->second);
   return absl::OkStatus();
 }
 
@@ -144,11 +213,31 @@ void ActionContext::WaitForActionsToDetachInternal(
   }
 }
 
+static ActionRegistry MakeSystemActionRegistry() {
+  ActionRegistry registry;
+
+  const ActionSchema& list_running_actions_schema =
+      GetListRunningActionsSchema();
+  registry.Register(list_running_actions_schema.name,
+                    list_running_actions_schema, ListRunningActionsHandler);
+
+  const ActionSchema& cancel_action_schema = GetCancelActionSchema();
+  registry.Register(cancel_action_schema.name, cancel_action_schema,
+                    CancelActionHandler);
+
+  const ActionSchema& ping_action_schema = GetPingActionSchema();
+  registry.Register(ping_action_schema.name, ping_action_schema,
+                    PingActionHandler);
+
+  return registry;
+}
+
 Session::Session(NodeMap* absl_nonnull node_map,
                  ActionRegistry* absl_nullable action_registry,
                  ChunkStoreFactory chunk_store_factory)
     : node_map_(node_map),
       action_registry_(action_registry),
+      system_action_registry_(MakeSystemActionRegistry()),
       chunk_store_factory_(std::move(chunk_store_factory)),
       action_context_(std::make_unique<ActionContext>()) {}
 
@@ -156,6 +245,11 @@ Session::~Session() {
   act::MutexLock lock(&mu_);
   action_context_->CancelContext();
   action_context_->WaitForActionsToDetach();
+  for (auto& [stream, _] : dispatch_tasks_) {
+    // Abort each stream to cancel Receive in the dispatchers. If already
+    // aborted or half-closed, this is a no-op.
+    stream->Abort(absl::CancelledError("Session is being destroyed."));
+  }
   JoinDispatchers(/*cancel=*/true);
 }
 
@@ -187,14 +281,14 @@ void Session::DispatchFrom(const std::shared_ptr<WireStream>& stream,
           {}, [this, stream, on_done = std::move(on_done)]() mutable {
             while (true) {
               absl::StatusOr<std::optional<WireMessage>> message =
-                  stream->Receive(GetRecvTimeout());
+                  stream->Receive(recv_timeout());
               if (!message.ok()) {
                 DLOG(ERROR) << "Failed to receive message: " << message.status()
                             << " from stream: " << stream->GetId()
                             << ". Stopping dispatch.";
               }
               if (!message.ok()) {
-                stream->Abort();
+                stream->Abort(message.status());
                 break;
               }
               if (!message->has_value()) {
@@ -230,6 +324,31 @@ void Session::DispatchFrom(const std::shared_ptr<WireStream>& stream,
           }));
 }
 
+static absl::Status ReportDispatchStatusToCallerStream(
+    WireStream* absl_nonnull stream, const std::string& action_id,
+    const absl::Status& status) {
+  std::vector fragments = {NodeFragment{
+      .id = absl::StrCat(action_id, "#", "__dispatch_status__"),
+      .data = ConvertTo<Chunk>(status).value(),
+      .seq = 0,
+      .continued = false,
+  }};
+  fragments.reserve(2);
+
+  // If there was an error during dispatch, also report it on the __status__
+  // because the caller may already not be listening to __dispatch_status__.
+  if (!status.ok()) {
+    fragments.push_back(NodeFragment{
+        .id = absl::StrCat(action_id, "#", "__status__"),
+        .data = ConvertTo<Chunk>(status).value(),
+        .seq = 0,
+        .continued = false,
+    });
+  }
+
+  return stream->Send(WireMessage{.node_fragments = std::move(fragments)});
+}
+
 absl::Status Session::DispatchMessage(WireMessage message,
                                       WireStream* absl_nullable stream) {
   act::MutexLock lock(&mu_);
@@ -238,12 +357,6 @@ absl::Status Session::DispatchMessage(WireMessage message,
         "Session has been joined, cannot dispatch messages.");
   }
   absl::Status status;
-  if (message.node_fragments.empty() && message.actions.empty()) {
-    if (stream != nullptr) {
-      stream->HalfClose();
-    }
-    return absl::OkStatus();
-  }
 
   std::vector<std::string> error_messages;
 
@@ -260,22 +373,39 @@ absl::Status Session::DispatchMessage(WireMessage message,
 
   for (auto& [action_id, action_name, inputs, outputs, headers] :
        message.actions) {
-    if (!action_registry_->IsRegistered(action_name)) {
+
+    if (!action_registry_->IsRegistered(action_name) &&
+        !system_action_registry_.IsRegistered(action_name)) {
       std::string action_not_found_msg =
           absl::StrCat("Action not found: ", action_name);
       error_messages.push_back(action_not_found_msg);
       status.Update(absl::NotFoundError(action_not_found_msg));
+      if (stream != nullptr) {
+        ReportDispatchStatusToCallerStream(
+            stream, action_id, absl::NotFoundError(action_not_found_msg))
+            .IgnoreError();
+      }
       continue;
     }
 
-    absl::StatusOr<std::unique_ptr<Action>> action_or_status =
-        action_registry_->MakeAction(action_name, action_id, std::move(inputs),
-                                     std::move(outputs));
+    absl::StatusOr<std::unique_ptr<Action>> action_or_status;
+    if (system_action_registry_.IsRegistered(action_name)) {
+      action_or_status = system_action_registry_.MakeAction(
+          action_name, action_id, std::move(inputs), std::move(outputs));
+    } else {
+      action_or_status = action_registry_->MakeAction(
+          action_name, action_id, std::move(inputs), std::move(outputs));
+    }
     if (!action_or_status.ok()) {
       error_messages.push_back(absl::StrCat("action ", action_name, " ",
                                             action_id, ": ",
                                             action_or_status.status()));
       status.Update(action_or_status.status());
+      if (stream != nullptr) {
+        ReportDispatchStatusToCallerStream(stream, action_id,
+                                           action_or_status.status())
+            .IgnoreError();
+      }
       continue;
     }
 
@@ -298,6 +428,11 @@ absl::Status Session::DispatchMessage(WireMessage message,
                                             action_id, ": ",
                                             action_dispatch_status));
       status.Update(action_dispatch_status);
+      if (stream != nullptr) {
+        ReportDispatchStatusToCallerStream(stream, action_id,
+                                           action_dispatch_status)
+            .IgnoreError();
+      }
     }
   }
 
@@ -348,6 +483,73 @@ void Session::JoinDispatchers(bool cancel) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     task->Join();
     mu_.lock();
   }
+}
+
+const ActionSchema& GetListRunningActionsSchema() {
+  static const ActionSchema* kListRunningActionsSchema = new ActionSchema{
+      .name = "__list_running_actions",
+      .inputs = {},
+      .outputs = {{"action_ids", "text/plain"}},
+  };
+  return *kListRunningActionsSchema;
+}
+
+absl::Status ListRunningActionsHandler(const std::shared_ptr<Action>& action) {
+  const Session* absl_nullable session = action->GetSession();
+  if (session == nullptr) {
+    return absl::FailedPreconditionError(
+        "Cannot list actions: action is not bound to a session.");
+  }
+  std::vector<std::shared_ptr<Action>> running_actions =
+      session->ListRunningActions();
+
+  AsyncNode* output = action->GetOutput("action_ids");
+  if (output == nullptr) {
+    return absl::FailedPreconditionError(
+        "Action has no 'action_ids' output. Cannot list running actions.");
+  }
+
+  for (const auto& running_action : running_actions) {
+    RETURN_IF_ERROR(output->Put({
+        .metadata = ChunkMetadata{.mimetype = "text/plain"},
+        .data = running_action->GetId(),
+    }));
+  }
+
+  return output->Put(EndOfStream());
+}
+
+const ActionSchema& GetCancelActionSchema() {
+  static const ActionSchema* kCancelActionSchema = new ActionSchema{
+      .name = "__cancel_action",
+      .inputs = {{"action_id", "text/plain"}},
+      .outputs = {},
+  };
+  return *kCancelActionSchema;
+}
+
+absl::Status CancelActionHandler(const std::shared_ptr<Action>& action) {
+  ASSIGN_OR_RETURN(const auto action_id,
+                   action->GetInput("action_id")->ConsumeAs<std::string>());
+  const Session* absl_nullable session = action->GetSession();
+  if (session == nullptr) {
+    return absl::FailedPreconditionError(
+        "Cannot cancel action: action is not bound to a session.");
+  }
+  return session->CancelAction(action_id);
+}
+
+const ActionSchema& GetPingActionSchema() {
+  static const ActionSchema* kPingActionSchema = new ActionSchema{
+      .name = "__ping",
+      .inputs = {},
+      .outputs = {},
+  };
+  return *kPingActionSchema;
+}
+
+absl::Status PingActionHandler(const std::shared_ptr<Action>& action) {
+  return absl::OkStatus();
 }
 
 }  // namespace act

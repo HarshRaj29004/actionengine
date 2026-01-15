@@ -43,17 +43,13 @@ absl::Status RunSimpleSession(std::shared_ptr<WireStream> stream,
   absl::Status status;
   while (!thread::Cancelled()) {
     absl::StatusOr<std::optional<WireMessage>> message =
-        owned_stream->Receive(session->GetRecvTimeout());
+        owned_stream->Receive(session->recv_timeout());
     if (!message.ok()) {
       status = message.status();
-      owned_stream->Abort();
-      DLOG(ERROR) << "Failed to receive message: " << status
-                  << " from stream: " << owned_stream->GetId()
-                  << ". Stopping dispatch and half-closing stream.";
+      owned_stream->Abort(status);
       break;
     }
     if (!message->has_value()) {
-      owned_stream->HalfClose();
       break;
     }
     status = session->DispatchMessage(std::move(message)->value(),
@@ -252,7 +248,8 @@ void Service::JoinConnectionsAndCleanUp(bool cancel) {
     }
     for (const auto& [_, connection] : connections) {
       if (connection != nullptr) {
-        connection->stream->Abort();
+        connection->stream->Abort(absl::CancelledError(
+            "Service is shutting down, aborting connection."));
       }
     }
   }

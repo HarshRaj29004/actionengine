@@ -24,6 +24,41 @@
 
 namespace cppack {
 
+namespace internal {
+
+void PackStrToStrAbslFlatHashMap(
+    const absl::flat_hash_map<std::string, std::string>& map, Packer& packer) {
+  const int64_t map_size = map.size();
+  packer(map_size);
+  for (const auto& [key, value] : map) {
+    packer(key);
+    packer(value);
+  }
+}
+
+absl::Status UnpackStrToStrAbslFlatHashMap(
+    absl::flat_hash_map<std::string, std::string>& map, Unpacker& unpacker) {
+  int64_t map_size;
+  unpacker(map_size);
+  if (map_size < 0) {
+    return absl::InvalidArgumentError("Negative map size in AbslFlatHashMap");
+  }
+  for (int64_t i = 0; i < map_size; ++i) {
+    std::string key;
+    std::string value;
+    unpacker(key);
+    unpacker(value);
+    map[std::move(key)] = std::move(value);
+  }
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking AbslFlatHashMap from bytes.");
+  }
+  return absl::OkStatus();
+}
+
+}  // namespace internal
+
 absl::Status CppackToBytes(const absl::Status& status, Packer& packer) {
   packer(status.raw_code());
   packer(std::string(status.message()));
@@ -34,7 +69,15 @@ absl::Status CppackFromBytes(absl::Status& status, Unpacker& unpacker) {
   int code;
   std::string message;
   unpacker(code);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking absl::Status from bytes (.code).");
+  }
   unpacker(message);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking absl::Status from bytes (.message).");
+  }
   status = absl::Status(static_cast<absl::StatusCode>(code), message);
   return absl::OkStatus();
 }
@@ -48,6 +91,9 @@ absl::Status CppackToBytes(absl::Time obj, Packer& packer) {
 absl::Status CppackFromBytes(absl::Time& obj, Unpacker& unpacker) {
   int64_t time;
   unpacker(time);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError("Error unpacking absl::Time from bytes.");
+  }
   obj = absl::FromUnixMicros(time);
   return absl::OkStatus();
 }
@@ -56,34 +102,24 @@ absl::Status CppackToBytes(const act::ChunkMetadata& obj, Packer& packer) {
   packer(obj.mimetype);
   packer(obj.timestamp);
 
-  const int64_t attributes_size = obj.attributes.size();
-  packer(attributes_size);
-  for (const auto& [key, value] : obj.attributes) {
-    packer(key);
-    packer(value);
-  }
+  internal::PackStrToStrAbslFlatHashMap(obj.attributes, packer);
 
   return absl::OkStatus();
 }
 
 absl::Status CppackFromBytes(act::ChunkMetadata& obj, Unpacker& unpacker) {
   unpacker(obj.mimetype);
-  unpacker(obj.timestamp);
-
-  int64_t attributes_size;
-  unpacker(attributes_size);
-  if (attributes_size < 0) {
+  if (unpacker.GetErrorCode()) {
     return absl::InvalidArgumentError(
-        "Negative attributes size in ChunkMetadata");
+        "Error unpacking ChunkMetadata from bytes (.mimetype).");
   }
-  for (int64_t i = 0; i < attributes_size; ++i) {
-    std::string key;
-    std::string value;
-    unpacker(key);
-    unpacker(value);
-    obj.attributes[std::move(key)] = std::move(value);
+  unpacker(obj.timestamp);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking ChunkMetadata from bytes (.timestamp).");
   }
-  return absl::OkStatus();
+
+  return internal::UnpackStrToStrAbslFlatHashMap(obj.attributes, unpacker);
 }
 
 absl::Status CppackToBytes(const act::Chunk& obj, Packer& packer) {
@@ -102,9 +138,21 @@ absl::Status CppackToBytes(const act::Chunk& obj, Packer& packer) {
 absl::Status CppackFromBytes(act::Chunk& obj, Unpacker& unpacker) {
   std::vector<uint8_t> data;
   unpacker(data);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking Chunk from bytes (.data).");
+  }
   obj.data = std::string(data.begin(), data.end());
   unpacker(obj.ref);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking Chunk from bytes (.ref).");
+  }
   unpacker(obj.metadata);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking Chunk from bytes (.metadata).");
+  }
   return absl::OkStatus();
 }
 
@@ -117,8 +165,20 @@ absl::Status CppackToBytes(const act::NodeRef& obj, Packer& packer) {
 
 absl::Status CppackFromBytes(act::NodeRef& obj, Unpacker& unpacker) {
   unpacker(obj.id);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking NodeRef from bytes (.id).");
+  }
   unpacker(obj.offset);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking NodeRef from bytes (.offset).");
+  }
   unpacker(obj.length);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking NodeRef from bytes (.length).");
+  }
   return absl::OkStatus();
 }
 
@@ -149,10 +209,18 @@ absl::Status CppackFromBytes(act::NodeFragment& obj, Unpacker& unpacker) {
   if (data_variant_index == 0) {
     act::Chunk chunk;
     unpacker(chunk);
+    if (unpacker.GetErrorCode()) {
+      return absl::InvalidArgumentError(
+          "Error unpacking NodeFragment Chunk data from bytes.");
+    }
     obj.data = std::move(chunk);
   } else if (data_variant_index == 1) {
     act::NodeRef node_ref;
     unpacker(node_ref);
+    if (unpacker.GetErrorCode()) {
+      return absl::InvalidArgumentError(
+          "Error unpacking NodeFragment NodeRef data from bytes.");
+    }
     obj.data = std::move(node_ref);
   } else {
     return absl::InvalidArgumentError(
@@ -161,8 +229,20 @@ absl::Status CppackFromBytes(act::NodeFragment& obj, Unpacker& unpacker) {
                         data_variant_index));
   }
   unpacker(obj.continued);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking NodeFragment from bytes (.continued).");
+  }
   unpacker(obj.id);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking NodeFragment from bytes (.id).");
+  }
   unpacker(obj.seq);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking NodeFragment from bytes (.seq).");
+  }
   return absl::OkStatus();
 }
 
@@ -174,7 +254,14 @@ absl::Status CppackToBytes(const act::Port& obj, Packer& packer) {
 
 absl::Status CppackFromBytes(act::Port& obj, Unpacker& unpacker) {
   unpacker(obj.name);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking Port from bytes (.name).");
+  }
   unpacker(obj.id);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError("Error unpacking Port from bytes (.id).");
+  }
   return absl::OkStatus();
 }
 
@@ -183,26 +270,64 @@ absl::Status CppackToBytes(const act::ActionMessage& obj, Packer& packer) {
   packer(obj.name);
   packer(obj.inputs);
   packer(obj.outputs);
+  internal::PackStrToStrAbslFlatHashMap(obj.headers, packer);
   return absl::OkStatus();
 }
 
 absl::Status CppackFromBytes(act::ActionMessage& obj, Unpacker& unpacker) {
   unpacker(obj.id);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking ActionMessage from bytes (.id).");
+  }
   unpacker(obj.name);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking ActionMessage from bytes (.name).");
+  }
   unpacker(obj.inputs);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking ActionMessage from bytes (.inputs).");
+  }
   unpacker(obj.outputs);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking ActionMessage from bytes (.outputs).");
+  }
+  absl::Status status =
+      internal::UnpackStrToStrAbslFlatHashMap(obj.headers, unpacker);
+  if (!status.ok()) {
+    return status;
+  }
+
   return absl::OkStatus();
 }
 
 absl::Status CppackToBytes(const act::WireMessage& obj, Packer& packer) {
   packer(obj.node_fragments);
   packer(obj.actions);
+  internal::PackStrToStrAbslFlatHashMap(obj.headers, packer);
   return absl::OkStatus();
 }
 
 absl::Status CppackFromBytes(act::WireMessage& obj, Unpacker& unpacker) {
   unpacker(obj.node_fragments);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking WireMessage from bytes (.node_fragments).");
+  }
   unpacker(obj.actions);
+  if (unpacker.GetErrorCode()) {
+    return absl::InvalidArgumentError(
+        "Error unpacking WireMessage from bytes (.actions).");
+  }
+  absl::Status status =
+      internal::UnpackStrToStrAbslFlatHashMap(obj.headers, unpacker);
+  if (!status.ok()) {
+    return status;
+  }
+
   return absl::OkStatus();
 }
 

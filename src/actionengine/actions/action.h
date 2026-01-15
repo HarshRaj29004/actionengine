@@ -89,6 +89,9 @@ class Action : public std::enable_shared_from_this<Action> {
 
   ~Action();
 
+  static std::string MakeNodeId(std::string_view action_id,
+                                std::string_view node_name);
+
   /** @brief
    *    Makes an action message to be sent on a WireStream.
    *
@@ -256,7 +259,11 @@ class Action : public std::enable_shared_from_this<Action> {
    * @return
    *   The status of sending the action call message.
    */
-  absl::Status Call();
+  absl::Status Call(
+      absl::flat_hash_map<std::string, std::string> wire_message_headers = {});
+
+  absl::StatusOr<absl::Status> CallAndWaitForDispatchStatus(
+      absl::flat_hash_map<std::string, std::string> wire_message_headers = {});
 
   /** @brief
    *    Run the action handler. Clients usually do not call this
@@ -348,6 +355,38 @@ class Action : public std::enable_shared_from_this<Action> {
     return user_data_.get();
   }
 
+  const absl::flat_hash_map<std::string, std::string>& headers() const {
+    return headers_;
+  }
+
+  absl::Status set_header(std::string_view key, std::string_view value) {
+    act::MutexLock lock(&mu_);
+    if (has_been_called_ || has_been_run_) {
+      return absl::FailedPreconditionError(
+          "Cannot modify headers after action has been called or run.");
+    }
+    headers_[key] = value;
+    return absl::OkStatus();
+  }
+
+  absl::Status remove_header(std::string_view key) {
+    act::MutexLock lock(&mu_);
+    if (has_been_called_ || has_been_run_) {
+      return absl::FailedPreconditionError(
+          "Cannot modify headers after action has been called or run.");
+    }
+    headers_.erase(key);
+    return absl::OkStatus();
+  }
+
+  std::optional<std::string_view> get_header(std::string_view key) const {
+    act::MutexLock lock(&mu_);
+    if (const auto it = headers_.find(key); it != headers_.end()) {
+      return it->second;
+    }
+    return std::nullopt;
+  }
+
  private:
   void CancelInternal() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
@@ -381,6 +420,7 @@ class Action : public std::enable_shared_from_this<Action> {
   WireStream* absl_nullable stream_ ABSL_GUARDED_BY(mu_) = nullptr;
   Session* absl_nullable session_ ABSL_GUARDED_BY(mu_) = nullptr;
   ActionRegistry* absl_nullable registry_ ABSL_GUARDED_BY(mu_) = nullptr;
+  absl::flat_hash_map<std::string, std::string> headers_;
 
   absl::flat_hash_set<ChunkStoreReader*> reffed_readers_ ABSL_GUARDED_BY(mu_);
 

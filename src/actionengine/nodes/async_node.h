@@ -258,6 +258,45 @@ inline auto AsyncNode::Next<NodeFragment>(std::optional<absl::Duration> timeout)
   return reader.NextFragment(timeout);
 }
 
+template <>
+inline absl::StatusOr<absl::Status> AsyncNode::ConsumeAs<absl::Status>(
+    std::optional<absl::Duration> timeout) {
+  timeout = timeout.value_or(GetReader().GetOptions().timeout_or_default());
+  const absl::Time started_at = absl::Now();
+
+  absl::StatusOr<absl::Status> result;
+
+  // The node being consumed must contain an element.
+  ASSIGN_OR_RETURN(std::optional<absl::Status> item,
+                   Next<absl::Status>(*timeout));
+  if (!item) {
+    result.AssignStatus(
+        absl::FailedPreconditionError("AsyncNode is empty at current offset, "
+                                      "cannot consume item as type T."));
+    return result;
+  }
+
+  const absl::Duration elapsed = absl::Now() - started_at;
+  if (elapsed > *timeout) {
+    result.AssignStatus(absl::DeadlineExceededError(
+        absl::StrCat("Timed out after ", absl::FormatDuration(elapsed),
+                     " while consuming item as type T.")));
+    return result;
+  }
+
+  // The node must be empty after consuming the item.
+  ASSIGN_OR_RETURN(const std::optional<Chunk> must_be_nullopt,
+                   Next<Chunk>(*timeout - elapsed));
+  if (must_be_nullopt.has_value()) {
+    result.AssignStatus(absl::FailedPreconditionError(
+        "AsyncNode must be empty after consuming the item."));
+    return result;
+  }
+
+  result.emplace() = *std::move(item);
+  return result;
+}
+
 template <typename T>
 absl::StatusOr<T> AsyncNode::ConsumeAs(std::optional<absl::Duration> timeout) {
   timeout = timeout.value_or(GetReader().GetOptions().timeout_or_default());

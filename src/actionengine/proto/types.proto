@@ -129,6 +129,13 @@ message ActionMessage {
    * port.
    */
   repeated Port outputs = 4;
+
+  /** Additional headers for the action.
+   *
+   * This is a mapping of header names to their values, allowing for
+   * extensibility and the inclusion of custom metadata as needed.
+   */
+  map<string, bytes> headers = 5;
 }
 
 /**
@@ -148,4 +155,11 @@ message WireMessage {
    * the receiving node or some end destination in case of a router/proxy.
    */
   repeated ActionMessage actions = 2;
+
+  /** Additional headers for the wire message.
+   *
+   * This is a mapping of header names to their values, allowing for
+   * extensibility and the inclusion of custom metadata as needed.
+   */
+  map<string, bytes> headers = 3;
 }

@@ -91,6 +91,11 @@ absl::StatusOr<py::object> RunThreadsafeIfCoroutine(
     return future;
   }
 
-  return future.attr("result")();
+  try {
+    return future.attr("result")();
+  } catch (py::error_already_set& e) {
+    return absl::InternalError(absl::StrCat(e.what()));
+  }
 }
+
 }  // namespace act::pybindings
