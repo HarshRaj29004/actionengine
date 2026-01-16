@@ -51,6 +51,7 @@ struct FutureOrTaskHolder {
 };
 
 ActionHandler MakeStatusAwareActionHandler(py::handle py_handler) {
+  py::gil_scoped_acquire gil;
   py_handler = py_handler.inc_ref();
   const py::function iscoroutinefunction =
       py::module_::import("inspect").attr("iscoroutinefunction");

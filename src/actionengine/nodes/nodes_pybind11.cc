@@ -47,10 +47,16 @@ void BindNodeMap(py::handle scope, std::string_view name) {
           },
           py::call_guard<py::gil_scoped_release>())
       .def(
+          "borrow",
+          [](const std::shared_ptr<NodeMap>& self, std::string_view id) {
+            return self->Borrow(id);
+          },
+          py::call_guard<py::gil_scoped_release>())
+      .def(
           "extract",
           [](const std::shared_ptr<NodeMap>& self,
              std::string_view id) -> std::optional<std::shared_ptr<AsyncNode>> {
-            std::unique_ptr<AsyncNode> node = self->Extract(id);
+            std::shared_ptr<AsyncNode> node = self->Extract(id);
             if (node == nullptr) {
               return std::nullopt;
             }

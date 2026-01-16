@@ -65,18 +65,15 @@ class NodeMap {
   NodeMap(NodeMap&& other) noexcept;
   NodeMap& operator=(NodeMap&& other) noexcept;
 
-  auto Get(std::string_view id,
-           const ChunkStoreFactory& chunk_store_factory = {})
-      -> AsyncNode* absl_nonnull;
-  auto operator[](std::string_view id) -> AsyncNode* absl_nonnull;
+  AsyncNode* absl_nonnull Get(
+      std::string_view id, const ChunkStoreFactory& chunk_store_factory = {});
+  std::shared_ptr<AsyncNode> Borrow(
+      std::string_view id, const ChunkStoreFactory& chunk_store_factory = {});
+  std::shared_ptr<AsyncNode> operator[](std::string_view id);
 
-  auto Get(const std::vector<std::string_view>& ids,
-           const ChunkStoreFactory& chunk_store_factory = {})
-      -> std::vector<AsyncNode*>;
+  [[nodiscard]] std::shared_ptr<AsyncNode> Extract(std::string_view id);
 
-  [[nodiscard]] std::unique_ptr<AsyncNode> Extract(std::string_view id);
-
-  auto insert(std::string_view id, AsyncNode&& node) -> AsyncNode&;
+  AsyncNode& insert(std::string_view id, AsyncNode&& node);
   bool contains(std::string_view id) const;
 
  private:
@@ -84,7 +81,7 @@ class NodeMap {
       const ChunkStoreFactory& factory = {}, std::string_view id = "") const;
 
   mutable act::Mutex mu_;
-  absl::flat_hash_map<std::string, std::unique_ptr<AsyncNode>> nodes_
+  absl::flat_hash_map<std::string, std::shared_ptr<AsyncNode>> nodes_
       ABSL_GUARDED_BY(mu_){};
 
   ChunkStoreFactory chunk_store_factory_;

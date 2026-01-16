@@ -213,6 +213,9 @@ void BindChunkMetadata(py::handle scope, std::string_view name) {
 }
 
 void BindChunk(py::handle scope, std::string_view name) {
+  const auto typing_module = py::module_::import("typing");
+  const auto awaitable = typing_module.attr("Awaitable");
+
   py::class_<Chunk>(scope, std::string(name).c_str())
       .def(py::init<>())
       .def(py::init([](ChunkMetadata metadata = ChunkMetadata(),
@@ -227,9 +230,42 @@ void BindChunk(py::handle scope, std::string_view name) {
       .def_readwrite("ref", &Chunk::ref)
       .def_property(
           "data", [](const Chunk& chunk) { return py::bytes(chunk.data); },
-          [](Chunk& chunk, const py::bytes& data) {
-            chunk.data = std::string(data);
+          [](Chunk& chunk, py::handle data) -> absl::Status {
+            if (py::isinstance<py::bytes>(data)) {
+              chunk.data = std::string(data.cast<py::bytes>());
+              return absl::OkStatus();
+            }
+            if (py::isinstance<py::str>(data)) {
+              chunk.data = std::string(data.cast<py::str>()
+                                           .attr("encode")("utf-8")
+                                           .cast<std::string>());
+              return absl::OkStatus();
+            }
+            std::string mimetype;
+            if (chunk.metadata) {
+              mimetype = chunk.metadata->mimetype;
+            }
+            ASSIGN_OR_RETURN(
+                const Chunk serialized_chunk,
+                pybindings::PyToChunk(data, mimetype, /*registry=*/nullptr));
+            chunk.data = serialized_chunk.data;
+            return absl::OkStatus();
           })
+      .def_static(
+          "make_from",
+          [](const py::handle& obj,
+             std::string_view mimetype = "") -> absl::StatusOr<Chunk> {
+            return pybindings::PyToChunk(obj, mimetype, /*registry=*/nullptr);
+          },
+          py::arg("obj"), py::arg_v("mimetype", ""), keep_event_loop_memo())
+      .def(
+          "deserialize",
+          [](const Chunk& chunk,
+             std::string_view mimetype = "") -> absl::StatusOr<py::object> {
+            return pybindings::PyFromChunk(chunk, mimetype,
+                                           /*registry=*/nullptr);
+          },
+          py::arg_v("mimetype", ""), keep_event_loop_memo())
       .def("__repr__", [](const Chunk& chunk) { return absl::StrCat(chunk); })
       .doc() =
       "An ActionEngine Chunk containing metadata and either a reference to or "
@@ -569,7 +605,8 @@ void BindSerializerRegistry(py::handle scope, std::string_view name) {
         if (!obj_type.is_none()) {
           if (!py::isinstance<py::type>(obj_type)) {
             return absl::InvalidArgumentError(
-                "obj_type must be a type, not an instance or other object.");
+                "obj_type must be a type, not an instance or other "
+                "object.");
           }
           // Register the mimetype with the type.
           auto mimetype_str = std::string(mimetype);
@@ -590,7 +627,8 @@ void BindSerializerRegistry(py::handle scope, std::string_view name) {
         if (!obj_type.is_none()) {
           if (!py::isinstance<py::type>(obj_type)) {
             return absl::InvalidArgumentError(
-                "obj_type must be a type, not an instance or other object.");
+                "obj_type must be a type, not an instance or other "
+                "object.");
           }
           // Register the mimetype with the type.
           auto mimetype_str = std::string(mimetype);
@@ -610,9 +648,8 @@ void BindSerializerRegistry(py::handle scope, std::string_view name) {
 }
 
 py::module_ MakeDataModule(py::module_ scope, std::string_view module_name) {
-  py::module_ data =
-      scope.def_submodule(std::string(module_name).c_str(),
-                          "ActionEngine data structures, as PODs.");
+  py::module_ data = scope.def_submodule(std::string(module_name).c_str(),
+                                         "ActionEngine data structures.");
 
   BindChunkMetadata(data, "ChunkMetadata");
   BindChunk(data, "Chunk");
@@ -759,7 +796,8 @@ absl::Status EgltAssignInto(PySerializationArgs args, std::any* dest) {
 
     if (mimetype_str.empty()) {
       return absl::InvalidArgumentError(
-          "Mimetype must be specified or globally associated with the "
+          "Mimetype must be specified or globally associated with "
+          "the "
           "object type.");
     }
   }

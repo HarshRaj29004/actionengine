@@ -60,27 +60,17 @@ AsyncNode* absl_nonnull NodeMap::Get(
   return nodes_[id].get();
 }
 
-std::vector<AsyncNode*> NodeMap::Get(
-    const std::vector<std::string_view>& ids,
-    const ChunkStoreFactory& chunk_store_factory) {
+std::shared_ptr<AsyncNode> NodeMap::Borrow(
+    std::string_view id, const ChunkStoreFactory& chunk_store_factory) {
   act::MutexLock lock(&mu_);
-
-  std::vector<AsyncNode*> nodes;
-  nodes.reserve(ids.size());
-
-  for (const auto& id : ids) {
-    if (!nodes_.contains(id)) {
-      nodes_[id] = std::make_unique<AsyncNode>(
-          id, this, MakeChunkStore(chunk_store_factory, id));
-    }
-
-    nodes.push_back(nodes_[id].get());
+  if (!nodes_.contains(id)) {
+    nodes_.emplace(id, std::make_unique<AsyncNode>(
+                           id, this, MakeChunkStore(chunk_store_factory, id)));
   }
-
-  return nodes;
+  return nodes_[id];
 }
 
-std::unique_ptr<AsyncNode> NodeMap::Extract(std::string_view id) {
+std::shared_ptr<AsyncNode> NodeMap::Extract(std::string_view id) {
   act::MutexLock lock(&mu_);
   if (const auto map_node = nodes_.extract(id); !map_node.empty()) {
     return std::move(map_node.mapped());
@@ -88,13 +78,8 @@ std::unique_ptr<AsyncNode> NodeMap::Extract(std::string_view id) {
   return nullptr;
 }
 
-AsyncNode* absl_nonnull NodeMap::operator[](std::string_view id) {
-  act::MutexLock lock(&mu_);
-  if (!nodes_.contains(id)) {
-    nodes_.emplace(id, std::make_unique<AsyncNode>(
-                           id, this, MakeChunkStore(chunk_store_factory_, id)));
-  }
-  return nodes_[id].get();
+std::shared_ptr<AsyncNode> NodeMap::operator[](std::string_view id) {
+  return Borrow(id);
 }
 
 AsyncNode& NodeMap::insert(std::string_view id, AsyncNode&& node) {

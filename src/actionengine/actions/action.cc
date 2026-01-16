@@ -83,16 +83,6 @@ Action::~Action() {
       }
     }
   }
-
-  // for (const auto& [input_name, input_id] : input_name_to_id_) {
-  //   node_map_->Extract(input_id).reset();
-  // }
-  //
-  // for (const auto& [output_name, output_id] : output_name_to_id_) {
-  //   node_map_->Extract(output_id).reset();
-  // }
-  // const std::string status_node_id = absl::StrCat(id_, "#", "__status__");
-  // node_map_->Extract(status_node_id).reset();
 }
 
 std::string Action::MakeNodeId(std::string_view action_id,
@@ -143,15 +133,14 @@ AsyncNode* absl_nullable Action::GetNode(std::string_view id) {
 AsyncNode* absl_nullable Action::GetInput(std::string_view name,
                                           std::optional<bool> bind_stream) {
   act::MutexLock lock(&mu_);
-  if (node_map_ == nullptr) {
-    return nullptr;
-  }
-
   if (!input_name_to_id_.contains(name)) {
     return nullptr;
   }
-
-  AsyncNode* node = node_map_->Get(GetInputId(name));
+  const auto it = borrowed_inputs_.find(name);
+  if (it == borrowed_inputs_.end()) {
+    return nullptr;
+  }
+  AsyncNode* node = it->second.get();
   if (stream_ != nullptr &&
       bind_stream.value_or(bind_streams_on_inputs_default_)) {
     absl::flat_hash_map<std::string, WireStream*> peers;
@@ -178,7 +167,25 @@ AsyncNode* absl_nullable Action::GetInput(std::string_view name,
 
 void Action::BindNodeMap(NodeMap* absl_nullable node_map) {
   act::MutexLock lock(&mu_);
+  borrowed_inputs_.clear();
+  borrowed_outputs_.clear();
+
+  if (node_map == nullptr) {
+    node_map_ = nullptr;
+    return;
+  }
+
   node_map_ = node_map;
+  for (const auto& [input_name, input_id] : input_name_to_id_) {
+    borrowed_inputs_[input_name] = node_map_->Borrow(input_id);
+  }
+  for (const auto& [output_name, output_id] : output_name_to_id_) {
+    borrowed_outputs_[output_name] = node_map_->Borrow(output_id);
+  }
+  borrowed_outputs_["__status__"] =
+      node_map_->Borrow(GetOutputId("__status__"));
+  borrowed_outputs_["__dispatch_status__"] =
+      node_map_->Borrow(GetOutputId("__dispatch_status__"));
 }
 
 NodeMap* absl_nullable Action::GetNodeMap() const {
@@ -306,16 +313,20 @@ absl::Status Action::Run() {
 
   // Propagate error statuses to all output nodes.
   if (!handler_status.ok()) {
-    for (const auto& [output_name, output_id] : output_name_to_id_) {
-      AsyncNode* output_node = node_map_->Get(output_id);
+    for (const auto& [output_name, output_node] : borrowed_outputs_) {
+      if (output_name == "__status__" || output_name == "__dispatch_status__") {
+        continue;
+      }
       output_node->Put(handler_status_chunk, /*seq=*/-1, /*final=*/true)
           .IgnoreError();
     }
   }
 
   // Wait for all output nodes to finish writing.
-  for (const auto& [output_name, output_id] : output_name_to_id_) {
-    AsyncNode* output_node = node_map_->Get(output_id);
+  for (const auto& [output_name, output_node] : borrowed_outputs_) {
+    if (output_name == "__status__") {
+      continue;
+    }
     output_node->GetWriter().WaitForBufferToDrain();
   }
 
@@ -328,19 +339,15 @@ absl::Status Action::Run() {
 
   absl::Status full_run_status = handler_status;
   if (stream_ != nullptr) {
-    // If the stream is bound, we send the status chunk to it.
-    // We are doing it here instead of relying on a bound stream.
-    const auto stream_ptr = stream_;
-    mu_.unlock();
     full_run_status.Update(
-        stream_ptr->Send(WireMessage{.node_fragments = {NodeFragment{
-                                         .id = GetOutputId("__status__"),
-                                         .data = handler_status_chunk,
-                                         .seq = 0,
-                                         .continued = false,
-                                     }}}));
-    mu_.lock();
+        stream_->Send(WireMessage{.node_fragments = {NodeFragment{
+                                      .id = GetOutputId("__status__"),
+                                      .data = handler_status_chunk,
+                                      .seq = 0,
+                                      .continued = false,
+                                  }}}));
   }
+  stream_ = nullptr;
 
   AsyncNode* status_node =
       GetOutputInternal("__status__", /*bind_stream=*/false);
@@ -351,13 +358,11 @@ absl::Status Action::Run() {
   run_status_ = full_run_status;
   cv_.SignalAll();
 
-  if (!clear_inputs_after_run_ && !clear_outputs_after_run_) {
+  if ((!clear_inputs_after_run_ && !clear_outputs_after_run_) ||
+      node_map_ == nullptr) {
     // If no clearing is requested, we can return early.
-    return full_run_status;
-  }
-
-  // Without a node map, we do not need to clear inputs or outputs.
-  if (node_map_ == nullptr) {
+    run_status_ = full_run_status;
+    cv_.SignalAll();
     return full_run_status;
   }
 
@@ -373,6 +378,8 @@ absl::Status Action::Run() {
     }
   }
 
+  run_status_ = full_run_status;
+  cv_.SignalAll();
   return full_run_status;
 }
 
@@ -387,15 +394,12 @@ void Action::ClearOutputsAfterRun(bool clear) {
 }
 
 void Action::CancelInternal() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
-  if (cancelled_->HasBeenNotified()) {
+  if (cancelled_->HasBeenNotified() || run_status_) {
     return;
   }
 
-  for (const auto& [input_name, input_id] : input_name_to_id_) {
-    if (AsyncNode* input_node = node_map_->Get(GetInputId(input_name));
-        input_node != nullptr) {
-      input_node->GetReader().Cancel();
-    }
+  for (const auto& [input_name, input_node] : borrowed_inputs_) {
+    input_node->GetReader().Cancel();
   }
 
   cancelled_->Notify();
@@ -416,16 +420,12 @@ std::string Action::GetOutputId(const std::string_view name) const {
 
 AsyncNode* absl_nullable Action::GetOutputInternal(
     std::string_view name, const std::optional<bool> bind_stream) {
-  if (node_map_ == nullptr) {
+  const auto it = borrowed_outputs_.find(name);
+  if (it == borrowed_outputs_.end()) {
     return nullptr;
   }
+  AsyncNode* node = it->second.get();
 
-  if (!output_name_to_id_.contains(name) && name != "__status__" &&
-      name != "__dispatch_status__") {
-    return nullptr;
-  }
-
-  AsyncNode* node = node_map_->Get(GetOutputId(name));
   if (stream_ != nullptr &&
       bind_stream.value_or(bind_streams_on_outputs_default_) &&
       name != "__status__" && name != "__dispatch_status__") {

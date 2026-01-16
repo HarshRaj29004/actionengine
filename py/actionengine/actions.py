@@ -314,3 +314,8 @@ class Action(_C.actions.Action):
         """Binds a NodeMap to the action."""
         super().bind_node_map(node_map)
         self._node_map = node_map
+
+    def __del__(self):
+        if hasattr(self, "_task") and self._task is not None:
+            if not self._task.done():
+                self._task.cancel()

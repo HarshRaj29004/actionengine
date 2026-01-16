@@ -119,6 +119,10 @@ class Session {
       std::string_view id,
       const ChunkStoreFactory& chunk_store_factory = {}) const;
 
+  [[nodiscard]] std::shared_ptr<AsyncNode> absl_nonnull BorrowNode(
+      std::string_view id,
+      const ChunkStoreFactory& chunk_store_factory = {}) const;
+
   void DispatchFrom(const std::shared_ptr<WireStream>& stream,
                     absl::AnyInvocable<void()> on_done = {});
   absl::Status DispatchMessage(WireMessage message,

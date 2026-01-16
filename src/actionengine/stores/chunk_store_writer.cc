@@ -115,19 +115,14 @@ absl::Status ChunkStoreWriter::RunWriteLoop() {
       break;
     }
 
-    auto peers = peers_;  // copy for use outside the lock
-
-    mu_.unlock();
-
     if (next_fragment) {
       next_fragment->id = chunk_store_->GetId();
       WireMessage message_for_peers;
       message_for_peers.node_fragments.push_back(*next_fragment);
-      for (const auto& [peer_id, peer] : peers) {
+      for (const auto& [peer_id, peer] : peers_) {
         status.Update(peer->Send(message_for_peers));
       }
       if (!status.ok()) {
-        mu_.lock();
         break;
       }
     }
@@ -135,7 +130,6 @@ absl::Status ChunkStoreWriter::RunWriteLoop() {
     absl::StatusOr<std::reference_wrapper<Chunk>> chunk_or_status =
         next_fragment->GetChunk();
     if (!chunk_or_status.ok()) {
-      mu_.lock();
       status.Update(chunk_or_status.status());
       break;
     }
@@ -145,7 +139,6 @@ absl::Status ChunkStoreWriter::RunWriteLoop() {
                                *std::move(chunk_or_status),
                                /*final=*/
                                !next_fragment->continued);
-    mu_.lock();
 
     if (!status.ok()) {
       break;
@@ -167,8 +160,9 @@ absl::StatusOr<int> ChunkStoreWriter::Put(Chunk value, int seq, bool final)
     ABSL_LOCKS_EXCLUDED(mu_) {
   act::MutexLock lock(&mu_);
   if (!accepts_puts_) {
-    return absl::FailedPreconditionError(
-        "Put was called on a writer that does not accept more puts.");
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Put was called on a writer that does not accept more puts: ",
+        chunk_store_->GetId()));
   }
 
   if (seq != -1 && final_seq_ != -1 && seq > final_seq_) {

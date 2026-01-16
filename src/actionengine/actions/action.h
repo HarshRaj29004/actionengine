@@ -416,6 +416,11 @@ class Action : public std::enable_shared_from_this<Action> {
   bool has_been_run_ ABSL_GUARDED_BY(mu_) = false;
   std::string id_;
 
+  absl::flat_hash_map<std::string, std::shared_ptr<AsyncNode>> borrowed_inputs_
+      ABSL_GUARDED_BY(mu_);
+  absl::flat_hash_map<std::string, std::shared_ptr<AsyncNode>> borrowed_outputs_
+      ABSL_GUARDED_BY(mu_);
+
   NodeMap* absl_nullable node_map_ ABSL_GUARDED_BY(mu_) = nullptr;
   WireStream* absl_nullable stream_ ABSL_GUARDED_BY(mu_) = nullptr;
   Session* absl_nullable session_ ABSL_GUARDED_BY(mu_) = nullptr;

@@ -263,6 +263,15 @@ AsyncNode* absl_nonnull Session::GetNode(
   return node_map_->Get(id, factory);
 }
 
+std::shared_ptr<AsyncNode> Session::BorrowNode(
+    std::string_view id, const ChunkStoreFactory& chunk_store_factory) const {
+  ChunkStoreFactory factory = chunk_store_factory;
+  if (factory == nullptr) {
+    factory = chunk_store_factory_;
+  }
+  return node_map_->Borrow(id, factory);
+}
+
 void Session::DispatchFrom(const std::shared_ptr<WireStream>& stream,
                            absl::AnyInvocable<void()> on_done) {
   act::MutexLock lock(&mu_);
@@ -361,7 +370,7 @@ absl::Status Session::DispatchMessage(WireMessage message,
   std::vector<std::string> error_messages;
 
   for (auto& node_fragment : message.node_fragments) {
-    AsyncNode* absl_nonnull node = GetNode(node_fragment.id);
+    const std::shared_ptr<AsyncNode> node = BorrowNode(node_fragment.id);
     const std::string node_id = node_fragment.id;
     if (absl::Status node_fragment_status = node->Put(std::move(node_fragment));
         !node_fragment_status.ok()) {
