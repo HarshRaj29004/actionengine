@@ -398,7 +398,8 @@ absl::Status Session::DispatchMessage(WireMessage message,
     }
 
     absl::StatusOr<std::unique_ptr<Action>> action_or_status;
-    if (system_action_registry_.IsRegistered(action_name)) {
+    if (system_action_registry_.IsRegistered(action_name) &&
+        action_name != "__list_actions") {
       action_or_status = system_action_registry_.MakeAction(
           action_name, action_id, std::move(inputs), std::move(outputs));
     } else {

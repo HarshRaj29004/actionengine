@@ -26,8 +26,9 @@ WORKDIR /opt
 # 1) Checkout the repo
 RUN git clone https://github.com/google-deepmind/actionengine /opt/actionengine
 
-COPY app /opt/actionengine/web/app
-COPY public /opt/actionengine/web/public
+COPY js/src /opt/actionengine/js/src
+COPY web/app /opt/actionengine/web/app
+COPY web/public /opt/actionengine/web/public
 
 ARG CACHEBUST=1
 
