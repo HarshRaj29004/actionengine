@@ -172,8 +172,7 @@ py::module_ MakeWebRtcModule(py::module_ scope, std::string_view module_name) {
   webrtc.def(
       "make_webrtc_stream",
       [](std::string_view identity, std::string_view peer_identity,
-         std::string_view signalling_address,
-         const absl::flat_hash_map<std::string, std::string>& headers,
+         std::string_view signalling_address, py::handle headers,
          std::optional<uint16_t> port)
           -> absl::StatusOr<std::shared_ptr<net::WebRtcWireStream>> {
         std::string signalling_url = absl::StrCat(signalling_address);
@@ -188,16 +187,23 @@ py::module_ MakeWebRtcModule(py::module_ scope, std::string_view module_name) {
             signalling_url = absl::StrCat("ws://", signalling_url);
           }
         }
-        ASSIGN_OR_RETURN(std::unique_ptr<net::WebRtcWireStream> stream,
-                         net::StartStreamWithSignalling(
-                             identity, peer_identity, signalling_url, headers));
+        absl::flat_hash_map<std::string, std::string> headers_map;
+        {
+          for (const auto headers_dict = py::cast<py::dict>(headers);
+               auto item : headers_dict) {
+            headers_map.emplace(py::cast<std::string>(item.first),
+                                py::cast<std::string>(item.second));
+          }
+        }
+        ASSIGN_OR_RETURN(
+            std::unique_ptr<net::WebRtcWireStream> stream,
+            net::StartStreamWithSignalling(identity, peer_identity,
+                                           signalling_url, headers_map));
         return stream;
       },
       py::arg_v("identity", "client"), py::arg_v("peer_identity", "server"),
       py::arg_v("signalling_address", "wss://actionengine.dev:19001"),
-      py::arg_v("headers", absl::flat_hash_map<std::string, std::string>{}),
-      py::arg_v("port", std::nullopt),
-      py::call_guard<py::gil_scoped_release>());
+      py::arg_v("headers", py::dict()), py::arg_v("port", std::nullopt));
 
   return webrtc;
 }

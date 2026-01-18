@@ -155,20 +155,34 @@ void BindSession(py::handle scope, std::string_view name) {
            py::call_guard<py::gil_scoped_release>());
 }
 
+ConnectionHandler MakeCppConnectionHandler(py::handle py_connection_handler) {
+  py_connection_handler = py_connection_handler.inc_ref();
+  if (py_connection_handler.is_none()) {
+    return nullptr;
+  }
+
+  return [py_connection_handler](std::shared_ptr<WireStream> stream,
+                                 Session* session) -> absl::Status {
+    py::gil_scoped_acquire acquire;
+    py::object result =
+        py_connection_handler(std::move(stream), ShareWithNoDeleter(session));
+    return result.cast<absl::Status>();
+  };
+}
+
 void BindService(py::handle scope, std::string_view name) {
   py::classh<Service>(scope, std::string(name).c_str(),
                       py::release_gil_before_calling_cpp_dtor())
-      .def(
-          py::init([](ActionRegistry* action_registry = nullptr,
-                      ConnectionHandler connection_handler = RunSimpleSession) {
-            if (connection_handler == nullptr) {
-              connection_handler = RunSimpleSession;
-            }
-            return std::make_shared<Service>(action_registry,
-                                             std::move(connection_handler));
-          }),
-          py::arg("action_registry"),
-          py::arg_v("connection_handler", py::none()))
+      .def(py::init([](ActionRegistry* action_registry = nullptr,
+                       py::handle py_connection_handler = py::none()) {
+             return std::make_shared<Service>(
+                 action_registry,
+                 py_connection_handler.is_none()
+                     ? RunSimpleSession
+                     : MakeCppConnectionHandler(py_connection_handler));
+           }),
+           py::arg("action_registry"),
+           py::arg_v("connection_handler", py::none()))
       .def(
           "get_stream",
           [](const std::shared_ptr<Service>& self,

@@ -30,6 +30,7 @@
 #include <pybind11/detail/descr.h>
 #include <pybind11/detail/internals.h>
 #include <pybind11/gil.h>
+#include <pybind11/stl.h>
 #include <pybind11_abseil/status_caster.h>
 #include <pybind11_abseil/statusor_caster.h>
 
@@ -50,8 +51,16 @@ void BindWebsocketWireStream(py::handle scope, std::string_view name) {
       py::release_gil_before_calling_cpp_dtor())
       .def("send", &net::WebsocketWireStream::Send,
            py::call_guard<py::gil_scoped_release>())
-      .def("receive", &net::WebsocketWireStream::Receive,
-           py::call_guard<py::gil_scoped_release>())
+      .def(
+          "receive",
+          [](const std::shared_ptr<net::WebsocketWireStream>& self,
+             double timeout) {
+            const absl::Duration timeout_duration =
+                timeout < 0.0 ? absl::InfiniteDuration()
+                              : absl::Seconds(timeout);
+            return self->Receive(timeout_duration);
+          },
+          py::arg_v("timeout", -1.0), py::call_guard<py::gil_scoped_release>())
       .def("accept", &net::WebsocketWireStream::Accept,
            py::call_guard<py::gil_scoped_release>())
       .def("start", &net::WebsocketWireStream::Start,

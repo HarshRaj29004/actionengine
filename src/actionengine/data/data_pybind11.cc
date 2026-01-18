@@ -207,6 +207,8 @@ void BindChunkMetadata(py::handle scope, std::string_view name) {
              metadata.attributes[key] =
                  std::string(value.attr("encode")("utf-8").cast<std::string>());
            })
+      .def("__eq__", [](const ChunkMetadata& lhs,
+                        const ChunkMetadata& rhs) { return lhs == rhs; })
       .def("__repr__",
            [](const ChunkMetadata& metadata) { return absl::StrCat(metadata); })
       .doc() = "Metadata for an ActionEngine Chunk.";
@@ -266,6 +268,8 @@ void BindChunk(py::handle scope, std::string_view name) {
                                            /*registry=*/nullptr);
           },
           py::arg_v("mimetype", ""), keep_event_loop_memo())
+      .def("__eq__",
+           [](const Chunk& lhs, const Chunk& rhs) { return lhs == rhs; })
       .def("__repr__", [](const Chunk& chunk) { return absl::StrCat(chunk); })
       .doc() =
       "An ActionEngine Chunk containing metadata and either a reference to or "
@@ -288,6 +292,8 @@ void BindNodeRef(py::handle scope, std::string_view name) {
       .def_readwrite("id", &NodeRef::id)
       .def_readwrite("offset", &NodeRef::offset)
       .def_readwrite("length", &NodeRef::length)
+      .def("__eq__",
+           [](const NodeRef& lhs, const NodeRef& rhs) { return lhs == rhs; })
       .def("__repr__",
            [](const NodeRef& node_ref) { return absl::StrCat(node_ref); })
       .doc() = "An ActionEngine NodeRef referencing a span of a node.";
@@ -325,6 +331,8 @@ void BindNodeFragment(py::handle scope, std::string_view name) {
           })
       .def_readwrite("seq", &NodeFragment::seq)
       .def_readwrite("continued", &NodeFragment::continued)
+      .def("__eq__", [](const NodeFragment& lhs,
+                        const NodeFragment& rhs) { return lhs == rhs; })
       .def("__repr__",
            [](const NodeFragment& fragment) { return absl::StrCat(fragment); })
       .doc() = "An ActionEngine NodeFragment.";
@@ -342,6 +350,8 @@ void BindPort(py::handle scope, std::string_view name) {
            py::kw_only(), py::arg_v("name", ""), py::arg_v("id", ""))
       .def_readwrite("name", &Port::name)
       .def_readwrite("id", &Port::id)
+      .def("__eq__",
+           [](const Port& lhs, const Port& rhs) { return lhs == rhs; })
       .def("__repr__",
            [](const Port& parameter) { return absl::StrCat(parameter); })
       .doc() = "An ActionEngine Port for an Action.";
@@ -425,6 +435,8 @@ void BindActionMessage(py::handle scope, std::string_view name) {
             self.headers.erase(key);
           },
           py::arg("key"))
+      .def("__eq__", [](const ActionMessage& lhs,
+                        const ActionMessage& rhs) { return lhs == rhs; })
       .def("__repr__",
            [](const ActionMessage& action) { return absl::StrCat(action); })
       .doc() = "An ActionEngine ActionMessage definition.";
@@ -521,6 +533,8 @@ void BindWireMessage(py::handle scope, std::string_view name) {
             return cppack::Unpack<WireMessage>(data_bytes);
           },
           py::arg("data"))
+      .def("__eq__", [](const WireMessage& lhs,
+                        const WireMessage& rhs) { return lhs == rhs; })
       .def("__repr__",
            [](const WireMessage& message) { return absl::StrCat(message); })
       .doc() = "An ActionEngine WireMessage data structure.";

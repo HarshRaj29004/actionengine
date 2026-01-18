@@ -112,7 +112,6 @@ class PyWireStream final : public WireStream {
     }
 
     if (result->is_none()) {
-
       return std::nullopt;
     }
     return std::move(result)->cast<WireMessage>();
