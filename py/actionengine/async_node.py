@@ -63,9 +63,6 @@ class AsyncNode(_C.nodes.AsyncNode):
           node_map: The node map to use for the node.
           serializer_registry: The serializer registry to use for the node.
         """
-        if chunk_store is None:
-            chunk_store = LocalChunkStore()
-
         self._deserialize_automatically_preference: bool | None = None
         self._serializer_registry = (
             serializer_registry or data.get_global_serializer_registry()
@@ -78,12 +75,6 @@ class AsyncNode(_C.nodes.AsyncNode):
         self._deserialize_automatically_preference: bool | None = None
         self._serializer_registry = data.get_global_serializer_registry()
         self._reader_options_set = False
-
-    def _ensure_reader_options_set(self):
-        """Ensures that the reader options are set."""
-        if not self._reader_options_set:
-            self.set_reader_options()
-            self._reader_options_set = True
 
     @property
     def deserialize(self) -> bool:
@@ -155,7 +146,6 @@ class AsyncNode(_C.nodes.AsyncNode):
         )
 
     def next_chunk_sync(self, timeout: float = -1.0) -> Optional[Chunk]:
-        self._ensure_reader_options_set()
         return super().next_chunk(timeout)  # pytype: disable=attribute-error
 
     async def next_fragment(
@@ -170,7 +160,6 @@ class AsyncNode(_C.nodes.AsyncNode):
         self, timeout: float = -1.0
     ) -> Optional[NodeFragment]:
         """Returns the next fragment in the store, or None if the store is empty."""
-        self._ensure_reader_options_set()
         return super().next_fragment(timeout)  # pytype: disable=attribute-error
 
     def put_fragment(

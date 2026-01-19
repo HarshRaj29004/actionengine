@@ -83,7 +83,7 @@ py::object& GetGloballySavedEventLoop();
  * @param loop
  *   The event loop to be saved.
  */
-void SaveEventLoopGlobally(const py::object& loop);
+void SaveEventLoopGlobally(const py::object& loop = py::none());
 
 void SaveFirstEncounteredEventLoop();
 

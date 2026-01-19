@@ -17,6 +17,8 @@ async def handle_connection(
 
 @pytest.mark.asyncio
 async def test_custom_connection_handler():
+    actionengine._C.save_event_loop_globally(asyncio.get_running_loop())
+
     action_registry = actionengine.ActionRegistry()
     service = actionengine.Service(action_registry, handle_connection)
     server = actionengine.websockets.WebsocketServer(service, port=20002)
@@ -49,3 +51,6 @@ async def test_custom_connection_handler():
 
     message = await asyncio.to_thread(client_stream.receive)
     assert message is None
+
+    server.cancel()
+    await asyncio.to_thread(server.join)

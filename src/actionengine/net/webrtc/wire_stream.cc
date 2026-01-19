@@ -156,8 +156,10 @@ absl::StatusOr<rtc::Configuration> RtcConfig::BuildLibdatachannelConfig()
     const {
   rtc::Configuration config;
   config.maxMessageSize = max_message_size;
-  config.portRangeBegin = 1024;
-  config.portRangeEnd = 65535;
+  const std::pair<uint16_t, uint16_t> port_range =
+      preferred_port_range.value_or(std::pair(1024, 65535));
+  config.portRangeBegin = port_range.first;
+  config.portRangeEnd = port_range.second;
   config.enableIceUdpMux = enable_ice_udp_mux;
 
   for (const auto& server : stun_servers) {
@@ -838,23 +840,25 @@ absl::StatusOr<WebRtcDataChannelConnection> StartWebRtcDataChannel(
 absl::StatusOr<std::unique_ptr<WebRtcWireStream>> StartStreamWithSignalling(
     std::string_view identity, std::string_view peer_identity,
     std::string_view signalling_url,
-    const absl::flat_hash_map<std::string, std::string>& headers) {
+    const absl::flat_hash_map<std::string, std::string>& headers,
+    std::optional<RtcConfig> rtc_config) {
 
   ASSIGN_OR_RETURN(auto ws_url, WsUrl::FromString(signalling_url));
 
   return StartStreamWithSignalling(identity, peer_identity, ws_url.host,
-                                   ws_url.port, ws_url.scheme == "wss",
-                                   headers);
+                                   ws_url.port, ws_url.scheme == "wss", headers,
+                                   std::move(rtc_config));
 }
 
 absl::StatusOr<std::unique_ptr<WebRtcWireStream>> StartStreamWithSignalling(
     std::string_view identity, std::string_view peer_identity,
     std::string_view address, uint16_t port, bool use_ssl,
-    const absl::flat_hash_map<std::string, std::string>& headers) {
+    const absl::flat_hash_map<std::string, std::string>& headers,
+    std::optional<RtcConfig> rtc_config) {
 
   absl::StatusOr<WebRtcDataChannelConnection> connection =
       StartWebRtcDataChannel(identity, peer_identity, address, port,
-                             std::nullopt, use_ssl, headers);
+                             std::move(rtc_config), use_ssl, headers);
   if (!connection.ok()) {
     return connection.status();
   }

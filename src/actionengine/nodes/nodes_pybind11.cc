@@ -200,7 +200,10 @@ void BindAsyncNode(py::handle scope, std::string_view name) {
             return self;
           },
           py::arg_v("options", ChunkStoreReaderOptions()),
-          py::call_guard<py::gil_scoped_release>());
+          py::call_guard<py::gil_scoped_release>())
+      .def("get_chunk_store", [](const std::shared_ptr<AsyncNode>& self) {
+        return ShareWithNoDeleter(self->GetChunkStore());
+      });
 }
 
 }  // namespace act::pybindings

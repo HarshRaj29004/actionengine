@@ -86,6 +86,9 @@ void BindRtcConfig(py::handle scope, std::string_view name) {
                      "A list of STUN servers to use for WebRTC connections.")
       .def_readwrite("turn_servers", &net::RtcConfig::turn_servers,
                      "A list of TURN servers to use for WebRTC connections.")
+      .def_readwrite("preferred_port_range",
+                     &net::RtcConfig::preferred_port_range,
+                     "An optional preferred port range for ICE candidates.")
       .def("__repr__",
            [](const net::RtcConfig& self) {
              return absl::StrFormat("RtcConfig(turn_servers=%zu)",

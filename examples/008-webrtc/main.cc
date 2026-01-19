@@ -46,7 +46,6 @@ int main(int argc, char** argv) {
   rtc_config.turn_servers = absl::GetFlag(FLAGS_webrtc_turn_servers);
   act::net::WebRtcServer server(
       &service, /*address=*/absl::GetFlag(FLAGS_webrtc_bind_address),
-      /*port=*/absl::GetFlag(FLAGS_webrtc_port),
       /*signalling_identity=*/absl::GetFlag(FLAGS_webrtc_signalling_identity),
       /*signalling_url=*/signalling_url,
       /*rtc_config=*/std::move(rtc_config));

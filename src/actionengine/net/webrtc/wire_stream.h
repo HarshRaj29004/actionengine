@@ -76,6 +76,10 @@ struct RtcConfig {
       "stun:stun.l.google.com:19302",
   };
   std::vector<TurnServer> turn_servers;
+
+  // The port range for ICE candidates is only preferred: for example,
+  // libdatachannel will honor it, but libwebrtc will not.
+  std::optional<std::pair<uint16_t, uint16_t>> preferred_port_range;
 };
 
 struct WebRtcDataChannelConnection {
@@ -200,12 +204,14 @@ class WebRtcWireStream final : public WireStream {
 absl::StatusOr<std::unique_ptr<WebRtcWireStream>> StartStreamWithSignalling(
     std::string_view identity, std::string_view peer_identity,
     std::string_view signalling_url,
-    const absl::flat_hash_map<std::string, std::string>& headers = {});
+    const absl::flat_hash_map<std::string, std::string>& headers = {},
+    std::optional<RtcConfig> rtc_config = std::nullopt);
 
 absl::StatusOr<std::unique_ptr<WebRtcWireStream>> StartStreamWithSignalling(
     std::string_view identity, std::string_view peer_identity,
     std::string_view address, uint16_t port, bool use_ssl,
-    const absl::flat_hash_map<std::string, std::string>& headers = {});
+    const absl::flat_hash_map<std::string, std::string>& headers = {},
+    std::optional<RtcConfig> rtc_config = std::nullopt);
 
 }  // namespace act::net
 

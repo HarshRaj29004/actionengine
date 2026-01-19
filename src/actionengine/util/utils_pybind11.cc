@@ -35,7 +35,15 @@ py::object& GetGloballySavedEventLoop() {
 }
 
 void SaveEventLoopGlobally(const py::object& loop) {
-  GetGloballySavedEventLoop() = loop;
+  py::object current_loop = loop;
+  if (current_loop.is_none()) {
+    try {
+      current_loop = py::module_::import("asyncio").attr("get_running_loop")();
+    } catch (py::error_already_set&) {
+      // No event loop was found.
+    }
+  }
+  GetGloballySavedEventLoop() = current_loop;
 }
 
 void SaveFirstEncounteredEventLoop() {

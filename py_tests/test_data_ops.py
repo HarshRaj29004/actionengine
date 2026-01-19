@@ -1,4 +1,3 @@
-import asyncio
 import datetime
 
 import actionengine
@@ -31,11 +30,6 @@ async def test_basic_metadata_ops():
 
     all_attributes = dict(metadata.attributes)
     assert all_attributes == {"key1": b"value1", "key2": b"value2"}
-
-
-@pytest.mark.asyncio
-async def test_metadata_equality():
-    assert False
 
 
 @pytest.mark.asyncio
@@ -89,11 +83,6 @@ async def test_basic_chunk_ops():
 
 
 @pytest.mark.asyncio
-async def test_chunk_equality():
-    assert False
-
-
-@pytest.mark.asyncio
 async def test_node_ref_ops():
     default_node_ref = actionengine.data.NodeRef()
     assert default_node_ref.id == ""
@@ -120,11 +109,6 @@ async def test_node_ref_ops():
 
 
 @pytest.mark.asyncio
-async def test_node_ref_equality():
-    assert False
-
-
-@pytest.mark.asyncio
 async def test_node_fragment_ops():
     default_fragment = actionengine.NodeFragment()
     assert default_fragment.id == ""
@@ -144,7 +128,7 @@ async def test_node_fragment_ops():
     assert fragment.id == "fragment_1"
     assert fragment.seq == 1
     assert fragment.continued is True
-    # assert fragment.chunk == actionengine.Chunk()
+    assert fragment.chunk == actionengine.Chunk()
     with pytest.raises(RuntimeError):
         _ = fragment.node_ref
 
@@ -158,7 +142,7 @@ async def test_node_fragment_ops():
     assert fragment.id == "fragment_2"
     assert fragment.seq == 2
     assert fragment.continued is False
-    # assert fragment.chunk == another_chunk
+    assert fragment.chunk == another_chunk
     with pytest.raises(RuntimeError):
         _ = fragment.node_ref
 

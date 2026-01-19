@@ -183,7 +183,7 @@ absl::Status Main(int argc, char** argv) {
   act::Service service(&action_registry);
   act::net::WebRtcServer server(
       &service, "127.0.0.1",
-      /*signalling_identity=*/"server",
+      /*signalling_identity=*/"echo-server-1",
       /*signalling_url=*/"wss://actionengine.dev:19001",
       /*rtc_config=*/std::nullopt);
   server.Run();

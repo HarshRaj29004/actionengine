@@ -80,7 +80,7 @@ def make_client_action_registry() -> actionengine.ActionRegistry:
 
 
 def setup_action_engine():
-    settings = actionengine.get_global_act_settings()
+    settings = actionengine.get_global_settings()
     settings.readers_remove_read_chunks = False
     settings.readers_deserialise_automatically = False
 

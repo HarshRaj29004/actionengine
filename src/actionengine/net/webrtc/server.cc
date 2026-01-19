@@ -457,9 +457,11 @@ std::shared_ptr<SignallingClient> WebRtcServer::InitSignallingClient(
       abort_establishment_with_error(peer_id, libdatachannel_config.status());
       return;
     }
+    const std::pair<uint16_t, uint16_t> port_range =
+        config.preferred_port_range.value_or(std::pair(1024, 65535));
     libdatachannel_config->bindAddress = address_;
-    // libdatachannel_config->portRangeBegin = 20002;
-    // libdatachannel_config->portRangeEnd = 20002;
+    libdatachannel_config->portRangeBegin = port_range.first;
+    libdatachannel_config->portRangeEnd = port_range.second;
 
     auto connection = std::make_unique<rtc::PeerConnection>(
         *std::move(libdatachannel_config));

@@ -71,6 +71,11 @@ PYBIND11_MODULE(_C, m) {
   pybindings::BindGlobalSettings(m, "GlobalSettings");
   pybindings::BindGetGlobalSettingsFunction(m, "get_global_settings");
 
+  m.def("save_event_loop_globally", &pybindings::SaveEventLoopGlobally,
+        py::arg_v("loop", py::none()),
+        "Saves the provided event loop globally for later use. If no loop is "
+        "provided, attempts to get the currently running event loop.");
+
   m.def("run_threadsafe_if_coroutine", &pybindings::RunThreadsafeIfCoroutine,
         py::arg("function_call_result"), py::arg_v("loop", py::none()),
         py::arg_v("return_future", false), pybindings::keep_event_loop_memo());

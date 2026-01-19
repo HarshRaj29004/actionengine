@@ -208,6 +208,8 @@ class AsyncNode {
   auto SetReaderOptions(const ChunkStoreReaderOptions& options) -> AsyncNode&;
   auto ResetReader() -> AsyncNode&;
 
+  ChunkStore* absl_nonnull GetChunkStore() const { return chunk_store_.get(); }
+
   template <typename T>
   friend AsyncNode& operator>>(AsyncNode& node, std::optional<T>& value);
 
