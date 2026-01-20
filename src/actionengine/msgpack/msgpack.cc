@@ -14,6 +14,8 @@
 
 #include "actionengine/msgpack/msgpack.h"
 
+#include <utility>
+
 namespace act::msgpack {
 
 Packer::Packer(SerializedBytesVector bytes) : bytes_(std::move(bytes)) {}

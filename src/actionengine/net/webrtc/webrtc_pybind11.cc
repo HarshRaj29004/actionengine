@@ -23,7 +23,6 @@
 
 #include <Python.h>
 #include <absl/base/nullability.h>
-#include <absl/log/check.h>
 #include <absl/status/status.h>
 #include <absl/status/statusor.h>
 #include <absl/strings/str_format.h>
@@ -44,9 +43,6 @@
 #include "actionengine/service/service.h"
 #include "actionengine/util/status_macros.h"
 #include "actionengine/util/utils_pybind11.h"
-#include "pybind11_abseil/absl_casters.h"
-#include "pybind11_abseil/status_caster.h"
-#include "pybind11_abseil/statusor_caster.h"
 
 namespace act::pybindings {
 

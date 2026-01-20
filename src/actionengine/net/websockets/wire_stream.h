@@ -91,6 +91,8 @@ class WebsocketWireStream final : public WireStream {
   absl::Status SendInternal(WireMessage message)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
+  void AbortInternal(absl::Status status) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+
   absl::Status HalfCloseInternal() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
   mutable act::Mutex mu_;

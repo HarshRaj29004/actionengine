@@ -40,6 +40,11 @@ namespace act::net {
 // Forward declaration of the wrapper class.
 class BoostWebsocketStream;
 
+struct AsioDone {
+  boost::system::error_code error;
+  thread::PermanentEvent event;
+};
+
 using PrepareStreamFn = std::function<absl::Status(
     BoostWebsocketStream* absl_nonnull,
     absl::AnyInvocable<void(boost::beast::websocket::request_type&)>)>;
@@ -309,15 +314,16 @@ absl::StatusOr<FiberAwareWebsocketStream> FiberAwareWebsocketStream::Connect(
       return absl::InternalError("Failed to set SNI hostname");
     }
 
-    thread::PermanentEvent ssl_handshake_done;
+    auto ssl_handshake_done = std::make_shared<AsioDone>();
     ws_stream->async_ssl_handshake(
         boost::asio::ssl::stream_base::client,
-        [&error, &ssl_handshake_done](const boost::system::error_code& ec) {
-          error = ec;
-          ssl_handshake_done.Notify();
+        [ssl_handshake_done](const boost::system::error_code& ec) {
+          ssl_handshake_done->error = ec;
+          ssl_handshake_done->event.Notify();
         });
 
-    thread::Select({ssl_handshake_done.OnEvent()});
+    thread::Select({ssl_handshake_done->event.OnEvent()});
+    error = ssl_handshake_done->error;
 
     if (thread::Cancelled()) {
       return absl::CancelledError("SSL Handshake cancelled");

@@ -297,6 +297,11 @@ void Service::CleanupConnection(const StreamToSessionConnection& connection) {
                << " has no more stable connections, deleted.";
   }
 
+  if (connection.status.ok()) {
+    extracted_stream->HalfClose();
+  } else {
+    extracted_stream->Abort(connection.status);
+  }
   extracted_stream.reset();
 
   extracted_node_map.reset();

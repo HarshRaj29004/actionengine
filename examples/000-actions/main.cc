@@ -26,6 +26,8 @@
 #include <actionengine/service/service.h>
 #include <actionengine/util/random.h>
 
+ABSL_FLAG(uint16_t, port, 20000, "Port to try to bind the WebRTC server to.");
+
 // Simply some type aliases to make the code more readable.
 using Action = act::Action;
 using ActionRegistry = act::ActionRegistry;
@@ -181,13 +183,16 @@ absl::Status Main(int argc, char** argv) {
   // and into their transport-level messages. There is an example of using
   // zmq streams and msgpack messages in one of the showcases.
   act::Service service(&action_registry);
+
+  act::net::RtcConfig rtc_config;
+  rtc_config.preferred_port_range = {absl::GetFlag(FLAGS_port),
+                                     absl::GetFlag(FLAGS_port)};
   act::net::WebRtcServer server(
       &service, "127.0.0.1",
       /*signalling_identity=*/"echo-server-1",
       /*signalling_url=*/"wss://actionengine.dev:19001",
-      /*rtc_config=*/std::nullopt);
+      /*rtc_config=*/std::move(rtc_config));
   server.Run();
-  act::SleepFor(absl::Seconds(0.2));
 
   act::NodeMap node_map;
   act::Session session(&node_map, &action_registry);
@@ -218,6 +223,7 @@ absl::Status Main(int argc, char** argv) {
   }
 
   stream->HalfClose();
+  act::SleepFor(absl::Seconds(0.2));
 
   RETURN_IF_ERROR(server.Cancel());
   RETURN_IF_ERROR(server.Join());

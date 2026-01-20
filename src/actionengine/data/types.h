@@ -22,7 +22,6 @@
 #ifndef ACTIONENGINE_DATA_TYPES_H_
 #define ACTIONENGINE_DATA_TYPES_H_
 
-#include <concepts>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -450,14 +449,16 @@ void AbslStringify(Sink& sink, const WireMessage& message) {
 
 template <typename T>
 concept ConvertibleToChunk = requires(T t) {
-  {EgltAssignInto(std::move(t), std::declval<Chunk*>())}
-      ->std::same_as<absl::Status>;
+  {
+    EgltAssignInto(std::move(t), std::declval<Chunk*>())
+  } -> std::same_as<absl::Status>;
 };
 
 template <typename T>
 concept ConvertibleFromChunk = requires(Chunk chunk) {
-  {EgltAssignInto(std::move(chunk), std::declval<T*>())}
-      ->std::same_as<absl::Status>;
+  {
+    EgltAssignInto(std::move(chunk), std::declval<T*>())
+  } -> std::same_as<absl::Status>;
 };
 
 inline Chunk EndOfStream() {

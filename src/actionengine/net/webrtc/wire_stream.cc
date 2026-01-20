@@ -404,9 +404,25 @@ WebRtcWireStream::WebRtcWireStream(
 }
 
 WebRtcWireStream::~WebRtcWireStream() {
-  data_channel_->close();
-  const absl::Time deadline = absl::Now() + absl::Seconds(10);
   act::MutexLock lock(&mu_);
+
+  if (!half_closed_) {
+    if (!closed_) {
+      LOG(ERROR) << "WebRtcWireStream destructor called before half-closing or "
+                    "aborting.";
+    }
+    // If closed at this point, AbortInternal will be a no-op.
+    AbortInternal(absl::ResourceExhaustedError(
+        "Stream was destroyed unexpectedly (before half-closing or aborting)"));
+  }
+
+  mu_.unlock();
+  try {
+    data_channel_->close();
+  } catch (const std::exception&) {}
+  mu_.lock();
+
+  const absl::Time deadline = absl::Now() + absl::Seconds(10);
   while (!closed_) {
     if (cv_.WaitWithDeadline(&mu_, deadline)) {
       break;
@@ -415,7 +431,9 @@ WebRtcWireStream::~WebRtcWireStream() {
   if (!closed_) {
     LOG(WARNING) << "WebRtcWireStream destructor timed out waiting for close.";
   }
-  connection_->close();
+  try {
+    connection_->close();
+  } catch (const std::exception&) {}
 }
 
 absl::Status WebRtcWireStream::Send(WireMessage message) {
@@ -531,6 +549,10 @@ absl::StatusOr<std::optional<WireMessage>> WebRtcWireStream::Receive(
 
 void WebRtcWireStream::Abort(absl::Status status) {
   act::MutexLock lock(&mu_);
+  AbortInternal(std::move(status));
+}
+
+void WebRtcWireStream::AbortInternal(absl::Status status) {
   if (closed_ || half_closed_) {
     return;
   }
@@ -790,7 +812,13 @@ absl::StatusOr<WebRtcDataChannelConnection> StartWebRtcDataChannel(
         }
         if (ice_state == rtc::PeerConnection::IceState::Failed) {
           state->connection()->resetCallbacks();
-          state->connection()->close();
+          try {
+            state->connection()->close();
+          } catch (const std::exception& exc) {
+            LOG(WARNING) << absl::StrFormat(
+                "Error closing PeerConnection after ICE failure: %s",
+                exc.what());
+          }
           state->ReportDoneWithStatus(absl::InternalError(
               "WebRtcWireStream connection failed during ICE negotiation"));
         }

@@ -21,3 +21,5 @@ third_party/build_deps/*
 **/*.so
 **/*.log
 /py/actionengine/_C/
+
+.cache/

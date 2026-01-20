@@ -336,19 +336,20 @@ absl::Status FiberAwareWebsocketStream::Write(
 
   write_pending_ = true;
 
-  boost::system::error_code error;
-  thread::PermanentEvent write_done;
+  auto write_done = std::make_shared<AsioDone>();
   stream_->binary(true);
   stream_->async_write(
       boost::asio::buffer(message_bytes),
-      [&error, &write_done](const boost::system::error_code& ec, std::size_t) {
-        error = ec;
-        write_done.Notify();
+      [write_done](const boost::system::error_code& ec, std::size_t) {
+        write_done->error = ec;
+        write_done->event.Notify();
       });
 
   mu_.unlock();
-  thread::Select({write_done.OnEvent()});
+  thread::Select({write_done->event.OnEvent()});
   mu_.lock();
+
+  boost::system::error_code error = write_done->error;
   write_pending_ = false;
   cv_.SignalAll();
 
@@ -391,19 +392,20 @@ absl::Status FiberAwareWebsocketStream::WriteText(
 
   write_pending_ = true;
 
-  boost::system::error_code error;
-  thread::PermanentEvent write_done;
+  auto write_done = std::make_shared<AsioDone>();
   stream_->text(true);
   stream_->async_write(
       boost::asio::buffer(message),
-      [&error, &write_done](const boost::system::error_code& ec, std::size_t) {
-        error = ec;
-        write_done.Notify();
+      [write_done](const boost::system::error_code& ec, std::size_t) {
+        write_done->error = ec;
+        write_done->event.Notify();
       });
 
   mu_.unlock();
-  thread::Select({write_done.OnEvent()});
+  thread::Select({write_done->event.OnEvent()});
   mu_.lock();
+
+  boost::system::error_code error = write_done->error;
   write_pending_ = false;
   cv_.SignalAll();
 
@@ -448,19 +450,22 @@ absl::Status FiberAwareWebsocketStream::CloseInternal() const noexcept
     return absl::OkStatus();
   }
 
-  boost::system::error_code error;
-
-  thread::PermanentEvent close_done;
+  auto close_done = std::make_shared<AsioDone>();
   stream_->async_close(
       boost::beast::websocket::close_code::normal,
-      [&error, &close_done](const boost::system::error_code& async_error) {
-        error = async_error;
-        close_done.Notify();
+      [close_done](const boost::system::error_code& async_error) {
+        close_done->error = async_error;
+        close_done->event.Notify();
       });
 
   mu_.unlock();
-  thread::Select({close_done.OnEvent()});
+  thread::Select({close_done->event.OnEvent()});
   mu_.lock();
+
+  if (close_done->error) {
+    LOG(ERROR) << absl::StrFormat("Cannot close websocket stream: %v",
+                                  close_done->error.message());
+  }
 
   return absl::OkStatus();
 }
@@ -496,18 +501,18 @@ absl::Status FiberAwareWebsocketStream::Accept() const noexcept {
       }));
   stream_->write_buffer_bytes(16);
 
-  boost::system::error_code error;
-  thread::PermanentEvent accept_done;
+  auto accept_done = std::make_shared<AsioDone>();
 
-  stream_->async_accept(
-      [&error, &accept_done](const boost::system::error_code& ec) {
-        error = ec;
-        accept_done.Notify();
-      });
+  stream_->async_accept([accept_done](const boost::system::error_code& ec) {
+    accept_done->error = ec;
+    accept_done->event.Notify();
+  });
 
   mu_.unlock();
-  thread::Select({accept_done.OnEvent(), thread::OnCancel()});
+  thread::Select({accept_done->event.OnEvent(), thread::OnCancel()});
   mu_.lock();
+
+  boost::system::error_code error = accept_done->error;
 
   if (thread::Cancelled()) {
     if (stream_->is_open()) {
@@ -559,24 +564,23 @@ absl::Status FiberAwareWebsocketStream::Read(
 
   read_pending_ = true;
 
-  boost::system::error_code error;
-  thread::PermanentEvent read_done;
   std::vector<uint8_t> temp_buffer;
   temp_buffer.reserve(64);  // Reserve some space to avoid some reallocations
   auto dynamic_buffer = boost::asio::dynamic_buffer(temp_buffer);
 
+  auto read_done = std::make_shared<AsioDone>();
   stream_->async_read(
       dynamic_buffer,
       boost::asio::bind_cancellation_slot(
           cancel_signal_.slot(),
-          [&error, &read_done](const boost::system::error_code& ec,
-                               std::size_t) {
-            error = ec;
-            read_done.Notify();
+          [read_done](const boost::system::error_code& ec, std::size_t) {
+            read_done->error = ec;
+            read_done->event.Notify();
           }));
 
   mu_.unlock();
-  const int selected = thread::SelectUntil(deadline, {read_done.OnEvent()});
+  const int selected =
+      thread::SelectUntil(deadline, {read_done->event.OnEvent()});
   mu_.lock();
 
   if (selected == -1) {
@@ -585,9 +589,11 @@ absl::Status FiberAwareWebsocketStream::Read(
     // We still need to wait for the read_done event to be processed because
     // it is a local variable, and we need to ensure that the callback has
     // completed before we return to avoid memory corruption.
-    thread::Select({read_done.OnEvent()});
+    thread::Select({read_done->event.OnEvent()});
     mu_.lock();
   }
+
+  boost::system::error_code error = read_done->error;
 
   // Only here we can safely let other read operations proceed.
   read_pending_ = false;

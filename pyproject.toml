@@ -2,21 +2,19 @@
 name = "action-engine"
 version = "0.3.2"
 
-authors = [
-    { name = "Helena Pankov", email = "helenapankov@google.com" },
-]
+authors = [{ name = "Helena Pankov", email = "helenapankov@google.com" }]
 description = "Action Engine"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 
 dependencies = [
-    "absl-py>=2.2.2",
-    "numpy>=2,<2.3.0",
-    "ormsgpack",
-    "Pillow",
-    "pydantic",
-    "pybind11>=2.13.6",
+  "absl-py>=2.2.2",
+  "numpy>=2,<2.3.0",
+  "ormsgpack",
+  "Pillow",
+  "pydantic",
+  "pybind11>=2.13.6",
 ]
 
 [project.scripts]
@@ -24,17 +22,18 @@ actionengine = "actionengine.cli.main:sync_main"
 
 [build-system]
 requires = [
-    "wheel",
-    "build",
-    "cmake==3.31.6",
-    #    "ninja",
-    "setuptools",
-    "ormsgpack",
-    "numpy>=2,<2.3.0",
-    #    "pybind11>=2.13.6",
-    "pybind11-stubgen>=2.5.5",
-    "Pillow",
-    "pydantic"]
+  "wheel",
+  "build",
+  "cmake==3.31.6",
+  #    "ninja",
+  "setuptools",
+  "ormsgpack",
+  "numpy>=2,<2.3.0",
+  #    "pybind11>=2.13.6",
+  "pybind11-stubgen>=2.5.5",
+  "Pillow",
+  "pydantic",
+]
 build-backend = "build_py"
 backend-path = ["./"]
 
@@ -47,3 +46,10 @@ include = ["actionengine", "actionengine.proto"]
 
 [tool.setuptools.package-data]
 actionengine = ["*.so", "_C/*.pyi"]
+
+[tool.black]
+line-length = 80
+
+[tool.isort]
+line_length = 80
+profile = "black"

@@ -96,21 +96,20 @@ void WebsocketServer::Run() {
           boost::asio::make_strand(*util::GetDefaultAsioExecutionContext())};
 
       DLOG(INFO) << "WES waiting for connection.";
-      boost::system::error_code error;
-      thread::PermanentEvent accepted;
-      acceptor_->async_accept(
-          socket, [&error, &accepted](const boost::system::error_code& ec) {
-            error = ec;
-            accepted.Notify();
-          });
+      auto accepted = std::make_shared<AsioDone>();
+      acceptor_->async_accept(socket,
+                              [accepted](const boost::system::error_code& ec) {
+                                accepted->error = ec;
+                                accepted->event.Notify();
+                              });
 
       mu_.unlock();
-      thread::Select({accepted.OnEvent(),
+      thread::Select({accepted->event.OnEvent(),
                       thread::OnCancel()});  // Wait for accept to complete.
       mu_.lock();
 
       cancelled_ = thread::Cancelled() ||
-                   error == boost::system::errc::operation_canceled ||
+                   accepted->error == boost::system::errc::operation_canceled ||
                    cancelled_;
       if (cancelled_) {
         DLOG(INFO) << "WebsocketServer canceled and is exiting "
@@ -118,15 +117,16 @@ void WebsocketServer::Run() {
         break;
       }
 
-      if (error) {
-        DLOG(ERROR) << "WebsocketServer accept() failed: " << error.message();
-        switch (error.value()) {
+      if (accepted->error) {
+        DLOG(ERROR) << "WebsocketServer accept() failed: "
+                    << accepted->error.message();
+        switch (accepted->error.value()) {
           case boost::system::errc::operation_canceled:
             status_ = absl::OkStatus();
             break;
           default:
             DLOG(ERROR) << "WebsocketServer accept() failed.";
-            status_ = absl::InternalError(error.message());
+            status_ = absl::InternalError(accepted->error.message());
             break;
         }
         // Any code reaching here means the service is shutting down.

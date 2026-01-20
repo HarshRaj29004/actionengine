@@ -79,7 +79,14 @@ auto PyDeserializerToCppDeserializer(py::function py_deserializer)
   return [py_deserializer = std::move(py_deserializer)](
              Bytes data) -> absl::StatusOr<std::any> {
     py::gil_scoped_acquire gil;
-    py::object result = py_deserializer(py::bytes(std::move(data)));
+    py::object result = py::none();
+    try {
+      result = py_deserializer(py::bytes(std::move(data)));
+    } catch (const py::error_already_set& e) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Python deserialization failed: ", e.what()));
+    }
+
     if (result.is_none()) {
       return absl::InvalidArgumentError("Deserialization returned None.");
     }

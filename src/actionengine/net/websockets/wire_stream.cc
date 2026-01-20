@@ -22,11 +22,11 @@
 #include <absl/base/optimization.h>
 #include <absl/log/log.h>
 #include <absl/time/time.h>
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/strand.hpp>
-#include <boost/asio/thread_pool.hpp>
-#include <boost/beast/core.hpp>
-#include <boost/beast/websocket.hpp>
+#include <boost/asio/ip/tcp.hpp>       // IWYU pragma: keep
+#include <boost/asio/strand.hpp>       // IWYU pragma: keep
+#include <boost/asio/thread_pool.hpp>  // IWYU pragma: keep
+#include <boost/beast/core.hpp>        // IWYU pragma: keep
+#include <boost/beast/websocket.hpp>   // IWYU pragma: keep
 #include <cppack/msgpack.h>
 
 #include "actionengine/data/msgpack.h"
@@ -64,8 +64,15 @@ absl::Status WebsocketWireStream::Send(WireMessage message) {
 
 WebsocketWireStream::~WebsocketWireStream() {
   act::MutexLock lock(&mu_);
-  if (!closed_) {
-    HalfCloseInternal().IgnoreError();
+  if (!half_closed_) {
+    if (!closed_) {
+      LOG(ERROR)
+          << "WebsocketWireStream destructor called before half-closing or "
+             "aborting.";
+    }
+    // If closed at this point, AbortInternal will be a no-op.
+    AbortInternal(absl::ResourceExhaustedError(
+        "Stream was destroyed unexpectedly (before half-closing or aborting)"));
   }
   closed_ = true;
 }
@@ -140,6 +147,11 @@ void WebsocketWireStream::HalfClose() {
 
 void WebsocketWireStream::Abort(absl::Status status) {
   act::MutexLock lock(&mu_);
+  AbortInternal(std::move(status));
+}
+
+void WebsocketWireStream::AbortInternal(absl::Status status)
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
   if (closed_ || half_closed_) {
     return;
   }
@@ -176,4 +188,5 @@ absl::Status WebsocketWireStream::HalfCloseInternal() {
 
   return absl::OkStatus();
 }
+
 }  // namespace act::net
