@@ -295,7 +295,12 @@ absl::Status Action::Run() {
   bind_streams_on_inputs_default_ = false;
   bind_streams_on_outputs_default_ = true;
 
-  has_been_run_ = true;
+  if (has_been_run_) {
+    return absl::FailedPreconditionError(
+        absl::StrFormat("Action %s with id=%s has already been run. "
+                        "Cannot run the action again.",
+                        schema_.name, id_));
+  }
 
   if (handler_ == nullptr) {
     return absl::FailedPreconditionError(
@@ -303,6 +308,8 @@ absl::Status Action::Run() {
                         "Cannot run the action.",
                         schema_.name, id_));
   }
+
+  has_been_run_ = true;
 
   mu_.unlock();
   absl::Status handler_status = handler_(shared_from_this());

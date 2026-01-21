@@ -15,7 +15,7 @@
  */
 
 import { ChunkStore } from './chunkStore.js';
-import { Channel } from './utils.js';
+import { Channel, Mutex } from './utils.js';
 import { Chunk, isEndOfStream, NodeFragment } from './data.js';
 
 export class ChunkStoreWriter {
@@ -30,6 +30,8 @@ export class ChunkStoreWriter {
   private writerLoop: Promise<void> | null;
   private buffer: Channel<NodeFragment | null>;
 
+  private readonly mu: Mutex;
+
   constructor(chunkStore: ChunkStore) {
     this.chunkStore = chunkStore;
 
@@ -41,12 +43,23 @@ export class ChunkStoreWriter {
 
     this.writerLoop = null;
     this.buffer = new Channel<NodeFragment>();
+    this.mu = new Mutex();
   }
 
   async put(
     chunk: Chunk,
     seq: number = -1,
     final: boolean = false,
+  ): Promise<number> {
+    return this.mu.runExclusive(async () => {
+      return this.putInternal(chunk, seq, final);
+    });
+  }
+
+  private async putInternal(
+    chunk: Chunk,
+    seq: number,
+    final: boolean,
   ): Promise<number> {
     if (!this.acceptsPuts) {
       throw new Error('ChunkStoreWriter is closed');
@@ -83,39 +96,54 @@ export class ChunkStoreWriter {
     return writtenSeq;
   }
 
+  async waitForBufferToDrain(): Promise<void> {
+    await this.mu.runExclusive(async () => {
+      this.acceptsPuts = false;
+      await this.buffer.close();
+      if (this.writerLoop !== null) {
+        await this.writerLoop;
+      }
+    });
+  }
+
   private async runWriterLoop() {
-    while (true) {
-      let nextFragment: NodeFragment | null = null;
+    await this.mu.runExclusive(async () => {
+      while (true) {
+        let nextFragment: NodeFragment | null = null;
 
-      try {
-        nextFragment = await this.buffer.receive();
-      } catch (e) {
-        console.error(e);
-        break;
-      }
+        try {
+          this.mu.release();
+          nextFragment = await this.buffer.receive();
+        } catch (e) {
+          console.error(e);
+          break;
+        } finally {
+          await this.mu.acquire();
+        }
 
-      if (nextFragment === null) {
-        break;
-      }
+        if (nextFragment === null) {
+          break;
+        }
 
-      try {
-        this.chunkStore.put(
-          nextFragment.seq,
-          nextFragment.data as Chunk,
-          !nextFragment.continued,
-        );
-      } catch (e) {
-        console.error(e);
-        break;
-      }
+        try {
+          this.chunkStore.put(
+            nextFragment.seq,
+            nextFragment.data as Chunk,
+            !nextFragment.continued,
+          );
+        } catch (e) {
+          console.error(e);
+          break;
+        }
 
-      ++this.totalChunksWritten;
-      if (this.finalSeq >= 0 && this.totalChunksWritten > this.finalSeq) {
-        await this.buffer.send(null);
+        ++this.totalChunksWritten;
+        if (this.finalSeq >= 0 && this.totalChunksWritten > this.finalSeq) {
+          await this.buffer.send(null);
+        }
       }
-    }
-    this.acceptsPuts = false;
-    await this.chunkStore.noFurtherPuts();
+      this.acceptsPuts = false;
+      await this.chunkStore.noFurtherPuts();
+    });
   }
 
   private ensureWriterLoop() {

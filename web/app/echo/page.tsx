@@ -76,10 +76,9 @@ export default function Page() {
     async (msg: ChatMessage) => {
       const action = makeAction('echo', actionEngine)
       action.call().then()
-      iterateResponse(await action.getOutput('response'), receiveMessage).then()
+      iterateResponse(action.getOutput('response'), receiveMessage).then()
 
-      const inputNode = await action.getInput('text')
-      await inputNode.putAndFinalize(makeTextChunk(msg.text))
+      await action.getInput('text').putAndFinalize(makeTextChunk(msg.text))
 
       setMessages((prev) => [...prev, msg])
     },

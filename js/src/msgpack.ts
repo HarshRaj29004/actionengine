@@ -24,6 +24,26 @@ import {
   ActionMessage,
   WireMessage,
 } from './data.js';
+import { Status } from './status';
+
+export const encodeStatus = (status: Status) => {
+  const packedCode = encode(status.code);
+  const packedMessage = encode(status.message);
+  const bytes = new Uint8Array(packedCode.length + packedMessage.length);
+  let offset = 0;
+  bytes.set(packedCode, offset);
+  offset += packedCode.length;
+  bytes.set(packedMessage, offset);
+  return bytes;
+};
+
+export const decodeStatus = (bytes: Uint8Array) => {
+  const [code, message] = decodeMulti(bytes) as unknown as [number, string];
+  return {
+    code,
+    message,
+  };
+};
 
 const rawDecode = async (blob: Blob | Uint8Array) => {
   if (blob instanceof ArrayBuffer) {

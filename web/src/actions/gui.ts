@@ -24,14 +24,14 @@ const getSelectedEntityIdsImpl = (world: World) => {
 }
 
 export const getSelectedEntityIds = async (world: World, action: Action) => {
-  const outputNode = await action.getOutput('response')
+  const outputNode = action.getOutput('response')
   const ids = getSelectedEntityIdsImpl(world)
   await outputNode.putAndFinalize({
     metadata: { mimetype: 'application/x-msgpack' },
     data: encode(ids) as Uint8Array<ArrayBuffer>,
   })
 
-  const logs = await action.getNodeMap().getNode('logs')
+  const logs = action.getNodeMap().getNode('logs')
   await logs.put(makeTextChunk(`RUN get_selected_entity_ids, ids=${ids}`))
 }
 
@@ -71,11 +71,11 @@ const moveOverTime = async (
 }
 
 export const setPosition = async (world: World, action: Action) => {
-  const requestNode = await action.getInput('request')
+  const requestNode = action.getInput('request')
   const requestChunk = await requestNode.next()
   const request = decode(requestChunk.data) as SetPositionRequest
 
-  const logs = await action.getNodeMap().getNode('logs')
+  const logs = action.getNodeMap().getNode('logs')
   await logs.put(
     makeTextChunk(
       `RUN set_position, entity_ids=${request.entity_ids}, positions=${request.positions}`,
@@ -114,11 +114,11 @@ interface ShiftPositionRequest {
 }
 
 export const shiftPosition = async (world: World, action: Action) => {
-  const requestNode = await action.getInput('request')
+  const requestNode = action.getInput('request')
   const requestChunk = await requestNode.next()
   const request = decode(requestChunk.data) as ShiftPositionRequest
 
-  const logs = await action.getNodeMap().getNode('logs')
+  const logs = action.getNodeMap().getNode('logs')
   await logs.put(
     makeTextChunk(
       `RUN shift_position, entity_ids=${request.entity_ids}, offsets=${request.offsets}`,
@@ -164,11 +164,11 @@ interface SetColorRequest {
 }
 
 export const setColor = async (world: World, action: Action) => {
-  const requestNode = await action.getInput('request')
+  const requestNode = action.getInput('request')
   const requestChunk = await requestNode.next()
   const request = decode(requestChunk.data) as SetColorRequest
 
-  const logs = await action.getNodeMap().getNode('logs')
+  const logs = action.getNodeMap().getNode('logs')
   await logs.put(
     makeTextChunk(
       `RUN set_color, entity_ids=${request.entity_ids}, colors=${request.colors}`,
@@ -232,7 +232,7 @@ export const takeGlScreenshot = async (state: RootState, action: Action) => {
   flippedCtx.drawImage(canvas, 0, 0)
 
   flippedCanvas.toBlob(async (blob) => {
-    const responseNode = await action.getOutput('screenshot')
+    const responseNode = action.getOutput('screenshot')
     await responseNode.putAndFinalize(await makeChunkFromBlob(blob!))
   }, 'image/png')
 }

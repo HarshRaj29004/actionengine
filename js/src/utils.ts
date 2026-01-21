@@ -15,6 +15,8 @@
  */
 
 import { Chunk } from './data.js';
+import { Status } from './status';
+import { encodeStatus } from './msgpack';
 
 class Waiter {
   private readonly promise: Promise<void>;
@@ -345,4 +347,14 @@ export const makeBlobFromChunk = (chunk: Chunk): Blob => {
 export const makeChunkFromBlob = async (blob: Blob): Promise<Chunk> => {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   return { metadata: { mimetype: blob.type }, data: bytes };
+};
+
+export const makeChunkFromStatus = (status: Status) => {
+  const data = encodeStatus(status);
+  return {
+    metadata: {
+      mimetype: '__status__',
+    },
+    data: data,
+  } as Chunk;
 };

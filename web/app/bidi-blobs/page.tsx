@@ -88,16 +88,17 @@ const setRandomPosition = (entity: Entity, engine: ActionEngineState) => {
 
   const action = makeAction('set_position', engine)
   action.run().then()
-  action.getInput('request', /*bindStream*/ false).then(async (requestNode) => {
-    const { entityId } = unpackEntity(entity)
-    await requestNode.putAndFinalize({
+  const requestNode = action.getInput('request', /*bindStream*/ false)
+  const { entityId } = unpackEntity(entity)
+  requestNode
+    .putAndFinalize({
       metadata: { mimetype: 'application/x-msgpack' },
       data: encode({
         entity_ids: [entityId],
         positions: [[randomX, randomY, randomZ]],
       }) as Uint8Array<ArrayBuffer>,
     })
-  })
+    .then()
 }
 
 const setRandomColor = (entity: Entity, engine: ActionEngineState) => {
@@ -109,16 +110,17 @@ const setRandomColor = (entity: Entity, engine: ActionEngineState) => {
 
   const action = makeAction('set_color', engine)
   action.run().then()
-  action.getInput('request', /*bindStream*/ false).then(async (requestNode) => {
-    const { entityId } = unpackEntity(entity)
-    await requestNode.putAndFinalize({
+  const requestNode = action.getInput('request', /*bindStream*/ false)
+  const { entityId } = unpackEntity(entity)
+  requestNode
+    .putAndFinalize({
       metadata: { mimetype: 'application/x-msgpack' },
       data: encode({
         entity_ids: [entityId],
         colors: [`#${randomColorHex}`],
       }) as Uint8Array<ArrayBuffer>,
     })
-  })
+    .then()
 }
 
 const BlobByEntity = ({
@@ -209,10 +211,7 @@ export default function Page() {
     }
     registerActions(world, actionEngine)
 
-    actionEngine.nodeMap
-      .getNode('logs')
-      .then((logs) => addLogsToMessages(logs, setMessages))
-      .then()
+    addLogsToMessages(actionEngine.nodeMap.getNode('logs'), setMessages).then()
     setInitialized(true)
 
     return () => {
@@ -313,14 +312,12 @@ export default function Page() {
           setMessages((prev) => [...prev, msg])
 
           const executeAction = makeAction('execute_prompt', actionEngine!)
-          const promptNode = await executeAction.getInput('prompt')
-          await promptNode.putAndFinalize(makeTextChunk(msg.text))
+          await executeAction
+            .getInput('prompt')
+            .putAndFinalize(makeTextChunk(msg.text))
 
-          const logs = await actionEngine?.nodeMap.getNode('logs')
-          subscribeToActionLogs(
-            await executeAction.getInput('logs'),
-            logs,
-          ).then()
+          const logs = actionEngine?.nodeMap.getNode('logs')
+          subscribeToActionLogs(executeAction.getInput('logs'), logs).then()
           await executeAction.call()
 
           await logs.put(

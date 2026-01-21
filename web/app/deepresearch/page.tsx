@@ -142,9 +142,7 @@ export default function Page() {
 
   const observeActionCallback = useCallback(
     async (action: DeepResearchAction) => {
-      const logNode = await actionEngine.nodeMap.getNode(
-        `${action.id}#user_log`,
-      )
+      const logNode = actionEngine.nodeMap.getNode(`${action.id}#user_log`)
       iterateLogs(logNode, setThoughts).then()
     },
     [actionEngine],
@@ -175,7 +173,7 @@ export default function Page() {
         ...prev,
         { text: `Fetching node ${nodeId}:`, sender: 'System', id: Date.now() },
       ])
-      const node = await actionEngine.nodeMap.getNode(nodeId)
+      const node = actionEngine.nodeMap.getNode(nodeId)
       setChatMessagesFromAsyncNode(node, setThoughts).then()
       return
     }
@@ -184,18 +182,18 @@ export default function Page() {
 
     setMessages((prev) => [...prev, msg])
 
-    const apiKeyNode = await action.getInput('api_key')
+    const apiKeyNode = action.getInput('api_key')
     await apiKeyNode.putAndFinalize(makeTextChunk(apiKey))
 
-    const topicNode = await action.getInput('topic')
+    const topicNode = action.getInput('topic')
     await topicNode.putAndFinalize(makeTextChunk(msg.text))
 
     setChatMessagesFromAsyncNode(
-      await action.getOutput('report'),
+       action.getOutput('report'),
       setMessages,
     ).then()
     observeNestedActions(
-      await action.getOutput('actions'),
+       action.getOutput('actions'),
       observeActionCallback,
     ).then()
   }

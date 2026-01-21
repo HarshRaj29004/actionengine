@@ -149,18 +149,17 @@ const useBlobControls = () => {
             const action = makeAction('generate_content', actionEngine)
             await action.call()
 
-            const apiKeyNode = await action.getInput('api_key')
-            await apiKeyNode.putAndFinalize(makeTextChunk('ollama'))
+            await action
+              .getInput('api_key')
+              .putAndFinalize(makeTextChunk('ollama'))
+            await action
+              .getInput('session_token')
+              .putAndFinalize(makeTextChunk(''))
+            await action
+              .getInput('chat_input')
+              .putAndFinalize(makeTextChunk(kCreatePromptPrompt))
 
-            const sessionTokenNode = await action.getInput('session_token')
-            await sessionTokenNode.putAndFinalize(makeTextChunk(''))
-
-            const chatInputNode = await action.getInput('chat_input')
-            await chatInputNode.putAndFinalize(
-              makeTextChunk(kCreatePromptPrompt),
-            )
-
-            const outputNode = await action.getOutput('output')
+            const outputNode = action.getOutput('output')
             const iterateOutput = async () => {
               outputNode.setReaderOptions(
                 /* ordered */ true,
@@ -192,8 +191,7 @@ const useBlobControls = () => {
             const action = makeAction('text_to_image', actionEngine)
             await action.call()
 
-            const requestNode = await action.getInput('request')
-            await requestNode.putAndFinalize({
+            await action.getInput('request').putAndFinalize({
               metadata: { mimetype: '__BaseModel__' },
               data: encodeBaseModelMessage(
                 'actions.text_to_image.DiffusionRequest',
@@ -210,7 +208,7 @@ const useBlobControls = () => {
             selectedEntity.set(TextureUrl, { url: kDefaultTextureUrl })
 
             const fetchImage = async () => {
-              const imageNode = await action.getOutput('image')
+              const imageNode = action.getOutput('image')
               imageNode.setReaderOptions(
                 /* ordered */ true,
                 /* removeChunks */ true,
@@ -234,7 +232,7 @@ const useBlobControls = () => {
             fetchImage().then()
 
             const fetchProgress = async () => {
-              const progressNode = await action.getOutput('progress')
+              const progressNode = action.getOutput('progress')
               progressNode.setReaderOptions(
                 /* ordered */ true,
                 /* removeChunks */ true,
@@ -371,20 +369,20 @@ export const GenmediaExample = () => {
     const action = makeAction('generate_content', actionEngine)
     await action.call()
 
-    const apiKeyNode = await action.getInput('api_key')
+    const apiKeyNode = action.getInput('api_key')
     await apiKeyNode.putAndFinalize(makeTextChunk('ollama'))
 
-    const sessionTokenNode = await action.getInput('session_token')
+    const sessionTokenNode = action.getInput('session_token')
     await sessionTokenNode.putAndFinalize(makeTextChunk(''))
 
-    const chatInputNode = await action.getInput('chat_input')
+    const chatInputNode = action.getInput('chat_input')
     await chatInputNode.putAndFinalize(
       makeTextChunk(
         'surprise me with a prompt to generate a really nice image. keep it short. only use small letters and no punctuation. only output one prompt. do NOT think much. This prompt MUST be a simple description. --nothink',
       ),
     )
 
-    const outputNode = await action.getOutput('output')
+    const outputNode = action.getOutput('output')
     const iterateOutput = async () => {
       outputNode.setReaderOptions(
         /* ordered */ true,

@@ -18,7 +18,11 @@ import { AsyncNode, NodeMap } from './asyncNode.js';
 import { BaseActionEngineStream } from './stream.js';
 import { Session } from './session.js';
 import { ActionMessage, Port } from './data.js';
+import { CondVar, makeChunkFromStatus, Mutex } from './utils';
+import { internalError, isOk, okStatus, Status } from './status';
+import { decodeStatus } from './msgpack';
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const doNothing = async (_: Action) => {};
 
 interface ActionNode {
@@ -85,7 +89,7 @@ export class ActionRegistry {
     const def = this.definitions.get(name);
     const handler = this.handlers.get(name);
 
-    return new Action(def, handler, id, nodeMap, stream, session);
+    return new Action(def, id, handler, nodeMap, stream, session);
   }
 }
 
@@ -101,12 +105,23 @@ export class Action {
   private bindStreamsOnInputsDefault: boolean = true;
   private bindStreamsOnOutputsDefault: boolean = false;
 
+  private hasBeenRun: boolean;
+  private hasBeenCalled: boolean = false;
+  private runStatus: Status | null = null;
   private readonly nodesWithBoundStreams: Set<AsyncNode>;
+
+  private clearOutputsAfterRun_: boolean;
+  private clearInputsAfterRun_: boolean = true;
+
+  private readonly mu: Mutex;
+  private readonly cv: CondVar;
+
+  private headers: Map<string, Uint8Array>;
 
   constructor(
     definition: ActionDefinition,
-    handler: ActionHandler,
     id: string = '',
+    handler: ActionHandler | null = null,
     nodeMap: NodeMap | null = null,
     stream: BaseActionEngineStream | null = null,
     session: Session | null = null,
@@ -120,7 +135,22 @@ export class Action {
 
     this.bindStreamsOnInputsDefault = true;
     this.bindStreamsOnOutputsDefault = false;
+
+    this.hasBeenRun = false;
+    this.hasBeenCalled = false;
+    this.runStatus = null;
     this.nodesWithBoundStreams = new Set();
+
+    this.clearOutputsAfterRun_ = true;
+
+    this.mu = new Mutex();
+    this.cv = new CondVar();
+
+    this.headers = new Map();
+  }
+
+  clearOutputsAfterRun(clear: boolean) {
+    this.clearOutputsAfterRun_ = clear;
   }
 
   getDefinition(): ActionDefinition {
@@ -151,80 +181,232 @@ export class Action {
       name: def.name,
       inputs,
       outputs,
+      headers: this.headers,
     };
   }
 
   async run(): Promise<void> {
-    this.bindStreamsOnInputsDefault = false;
-    this.bindStreamsOnOutputsDefault = true;
+    return await this.mu.runExclusive(async () => {
+      this.bindStreamsOnInputsDefault = false;
+      this.bindStreamsOnOutputsDefault = true;
 
-    // TODO: return status properly
-    try {
-      await this.handler(this);
-    } finally {
+      if (this.hasBeenRun) {
+        throw new Error('Action has already been run.');
+      }
+
+      if (this.handler === null) {
+        throw new Error('Action handler is not bound.');
+      }
+
+      this.hasBeenRun = true;
+      let handlerStatus = okStatus();
+
+      this.mu.release();
+      try {
+        await this.handler(this);
+      } catch (e: unknown) {
+        if (e instanceof Error) {
+          handlerStatus = internalError(e.message);
+        } else {
+          handlerStatus = internalError(
+            `Unknown error occurred in action handler: caught ${e}.`,
+          );
+        }
+      } finally {
+        await this.mu.acquire();
+      }
+
+      const handlerStatusChunk = makeChunkFromStatus(handlerStatus);
+
+      // Propagate status to outputs if not OK
+      if (!isOk(handlerStatus)) {
+        for (const output of this.definition.outputs) {
+          if (
+            output.name == '__status__' ||
+            output.name == '__dispatch_status__'
+          ) {
+            continue;
+          }
+          const outputNode = this.getOutput(output.name);
+          await outputNode.put(handlerStatusChunk, -1, true);
+        }
+      }
+
+      for (const output of this.definition.outputs) {
+        if (output.name == '__status__') {
+          continue;
+        }
+        const outputNode = this.getOutput(output.name);
+        const writer = await outputNode.getWriter();
+        await writer.waitForBufferToDrain();
+      }
+
       await this.unbindStreams();
+
+      if (this.stream !== null) {
+        await this.stream.send({
+          nodeFragments: [
+            {
+              id: this.getOutputId('__status__'),
+              data: handlerStatusChunk,
+              seq: 0,
+              continued: false,
+            },
+          ],
+        });
+      }
+
+      const statusNode = this.getOutput('__status__', false);
+      await statusNode.put(handlerStatusChunk, 0, true);
+      const statusWriter = await statusNode.getWriter();
+      await statusWriter.waitForBufferToDrain();
+
+      this.runStatus = handlerStatus;
+      this.cv.notifyAll();
+
+      if (
+        (!this.clearInputsAfterRun_ && !this.clearOutputsAfterRun_) ||
+        this.nodeMap === null
+      ) {
+        if (!isOk(handlerStatus)) {
+          throw new Error(
+            `Action failed with status: ${handlerStatus.message}`,
+          );
+        }
+        return;
+      }
+
+      if (this.clearInputsAfterRun_) {
+        for (const input of this.definition.inputs) {
+          this.nodeMap.removeNode(this.getInputId(input.name));
+        }
+      }
+
+      if (this.clearOutputsAfterRun_) {
+        for (const output of this.definition.outputs) {
+          this.nodeMap.removeNode(this.getOutputId(output.name));
+        }
+      }
+
+      if (!isOk(handlerStatus)) {
+        throw new Error(`Action failed with status: ${handlerStatus.message}`);
+      }
+      return;
+    });
+  }
+
+  async call(headers: Map<string, Uint8Array> | null = null): Promise<void> {
+    this.bindStreamsOnInputsDefault = true;
+    this.bindStreamsOnOutputsDefault = false;
+    this.hasBeenCalled = true;
+
+    if (this.stream !== null) {
+      await this.stream.send({
+        actions: [this.getActionMessage()],
+        headers,
+      });
     }
   }
 
-  async call(): Promise<void> {
-    this.bindStreamsOnInputsDefault = true;
-    this.bindStreamsOnOutputsDefault = false;
-
-    await this.stream.send({ actions: [this.getActionMessage()] });
+  async callAndWaitForDispatchStatus(
+    headers: Map<string, Uint8Array> | null = null,
+  ): Promise<Status> {
+    await this.call(headers);
+    const dispatchStatusNode = this.getOutput('__dispatch_status__', false);
+    const chunk = await dispatchStatusNode.next();
+    if (chunk === null) {
+      return internalError('No dispatch status received.');
+    }
+    return decodeStatus(chunk.data);
   }
 
-  async getNode(id: string): Promise<AsyncNode> {
-    return await this.nodeMap.getNode(id);
+  async awaitAction(timeoutMs?: number): Promise<Status> {
+    return await this.mu.runExclusive(async () => {
+      if (this.hasBeenRun) {
+        const start = Date.now();
+        while (this.runStatus === null) {
+          const remaining = timeoutMs ? timeoutMs - (Date.now() - start) : -1;
+          if (remaining !== undefined && remaining <= 0) {
+            throw new Error('Timeout awaiting action');
+          }
+          await this.cv.waitWithTimeout(this.mu, remaining);
+        }
+        return this.runStatus;
+      }
+
+      if (this.hasBeenCalled) {
+        const statusNode = this.getOutput('__status__', false);
+        this.mu.release();
+        try {
+          const statusChunk = await statusNode.next();
+          if (statusChunk === null) {
+            return internalError('No status received.');
+          }
+          return decodeStatus(statusChunk.data);
+        } finally {
+          await this.mu.acquire();
+        }
+      }
+
+      throw new Error('Action has not been run or called yet.');
+    });
   }
 
-  async getInput(
-    name: string,
-    bindStream: boolean | null = null,
-  ): Promise<AsyncNode> {
-    const node = await this.getNode(this.getInputId(name));
+  getNode(id: string): AsyncNode {
+    return this.nodeMap.getNode(id);
+  }
+
+  getInput(name: string, bindStream: boolean | null = null): AsyncNode {
+    const node = this.getNode(this.getInputId(name));
     let bindStreamResolved = bindStream;
     if (bindStream === null) {
       bindStreamResolved = this.bindStreamsOnInputsDefault;
     }
     if (this.stream !== null && bindStreamResolved) {
-      await node.bindWriterStream(this.stream);
-      this.nodesWithBoundStreams.add(node);
+      node.bindWriterStream(this.stream).then(() => {
+        this.nodesWithBoundStreams.add(node);
+      });
     }
     return node;
   }
 
-  async getOutput(
-    name: string,
-    bindStream: boolean | null = null,
-  ): Promise<AsyncNode> {
-    const node = await this.getNode(this.getOutputId(name));
+  getOutput(name: string, bindStream: boolean | null = null): AsyncNode {
+    const node = this.getNode(this.getOutputId(name));
     let bindStreamResolved = bindStream;
     if (bindStream === null) {
       bindStreamResolved = this.bindStreamsOnOutputsDefault;
     }
-    if (this.stream !== null && bindStreamResolved) {
-      await node.bindWriterStream(this.stream);
-      this.nodesWithBoundStreams.add(node);
+    if (
+      this.stream !== null &&
+      bindStreamResolved &&
+      name != '__status__' &&
+      name != '__dispatch_status__'
+    ) {
+      node.bindWriterStream(this.stream).then(() => {
+        this.nodesWithBoundStreams.add(node);
+      });
     }
     return node;
   }
 
-  bindHandler(handler: ActionHandler) {
+  bindHandler(handler: ActionHandler | null) {
     this.handler = handler;
   }
 
-  bindNodeMap(nodeMap: NodeMap) {
+  bindNodeMap(nodeMap: NodeMap | null) {
     this.nodeMap = nodeMap;
   }
-  getNodeMap(): NodeMap {
+
+  getNodeMap(): NodeMap | null {
     return this.nodeMap as NodeMap;
   }
 
-  bindStream(stream: BaseActionEngineStream) {
+  bindStream(stream: BaseActionEngineStream | null) {
     this.stream = stream;
   }
-  getStream(): BaseActionEngineStream {
-    return this.stream as BaseActionEngineStream;
+
+  getStream(): BaseActionEngineStream | null {
+    return this.stream as BaseActionEngineStream | null;
   }
 
   getRegistry(): ActionRegistry {
@@ -234,6 +416,7 @@ export class Action {
   bindSession(session: Session) {
     this.session = session;
   }
+
   getSession(): Session {
     return this.session as Session;
   }
@@ -277,5 +460,5 @@ export function fromActionMessage(
   const def = registry.definitions.get(message.name);
   const handler = registry.handlers.get(message.name);
 
-  return new Action(def, handler, actionId, nodeMap, stream, session);
+  return new Action(def, actionId, handler, nodeMap, stream, session);
 }

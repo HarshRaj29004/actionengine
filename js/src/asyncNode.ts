@@ -24,7 +24,6 @@ import { Mutex } from './utils.js';
 export class NodeMap {
   private nodes: Map<string, AsyncNode>;
   private readonly chunkStoreFactory: (() => ChunkStore) | null;
-  private mutex: Mutex;
 
   constructor(chunkStoreFactory: (() => ChunkStore) | null = null) {
     this.nodes = new Map();
@@ -32,22 +31,21 @@ export class NodeMap {
       chunkStoreFactory !== null
         ? chunkStoreFactory
         : () => new LocalChunkStore();
-    this.mutex = new Mutex();
   }
 
-  async hasNode(id: string): Promise<boolean> {
-    return await this.mutex.runExclusive(async () => {
-      return this.nodes.has(id);
-    });
+  removeNode(id: string): boolean {
+    return this.nodes.delete(id);
   }
 
-  async getNode(id: string): Promise<AsyncNode> {
-    return await this.mutex.runExclusive(async () => {
-      if (!this.nodes.has(id)) {
-        this.nodes.set(id, new AsyncNode(id, this.chunkStoreFactory()));
-      }
-      return this.nodes.get(id) as AsyncNode;
-    });
+  hasNode(id: string): boolean {
+    return this.nodes.has(id);
+  }
+
+  getNode(id: string): AsyncNode {
+    if (!this.nodes.has(id)) {
+      this.nodes.set(id, new AsyncNode(id, this.chunkStoreFactory()));
+    }
+    return this.nodes.get(id) as AsyncNode;
   }
 }
 
@@ -141,6 +139,11 @@ export class AsyncNode {
   ): AsyncNode {
     this.ensureReader(ordered, removeChunks, nChunksToBuffer).then();
     return this;
+  }
+
+  async getWriter(): Promise<ChunkStoreWriter> {
+    await this.ensureWriter();
+    return this.defaultWriter as ChunkStoreWriter;
   }
 
   private async ensureReader(

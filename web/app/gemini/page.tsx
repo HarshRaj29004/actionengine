@@ -101,13 +101,13 @@ export default function Page() {
       const action = makeAction('rehydrate_session', actionEngine)
       action.call().then()
 
-      const sessionTokenNode = await action.getInput('session_token')
+      const sessionTokenNode = action.getInput('session_token')
       await sessionTokenNode.putAndFinalize(makeTextChunk(sessionToken || ''))
 
-      const previousMessagesNode = await action.getOutput('previous_messages')
+      const previousMessagesNode = action.getOutput('previous_messages')
       rehydrateMessages(previousMessagesNode, setMessages).then()
 
-      const previousThoughtsNode = await action.getOutput('previous_thoughts')
+      const previousThoughtsNode = action.getOutput('previous_thoughts')
       rehydrateThoughts(previousThoughtsNode, setThoughts).then()
     }
     actionEngine.stream.waitUntilReady().then(() => {
@@ -150,25 +150,25 @@ export default function Page() {
 
     setMessages((prev) => [...prev, msg])
 
-    const sessionTokenNode = await action.getInput('session_token')
+    const sessionTokenNode = action.getInput('session_token')
     await sessionTokenNode.putAndFinalize(makeTextChunk(sessionToken || ''))
 
-    const chatInputNode = await action.getInput('chat_input')
+    const chatInputNode = action.getInput('chat_input')
     await chatInputNode.putAndFinalize(makeTextChunk(msg.text))
 
-    const apiKeyNode = await action.getInput('api_key')
+    const apiKeyNode = action.getInput('api_key')
     await apiKeyNode.putAndFinalize(makeTextChunk(apiKey))
 
     setChatMessagesFromAsyncNode(
-      await action.getOutput('output'),
+       action.getOutput('output'),
       setMessages,
     ).then()
     setChatMessagesFromAsyncNode(
-      await action.getOutput('thoughts'),
+       action.getOutput('thoughts'),
       setThoughts,
     ).then()
     setSessionTokenFromAction(
-      await action.getOutput('new_session_token'),
+       action.getOutput('new_session_token'),
       setNextSessionToken,
     ).then()
   }
