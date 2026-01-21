@@ -9,8 +9,8 @@ import {
   AsyncNode,
   makeTextChunk,
 } from '@helenapankov/actionengine'
-import { useCallback, useContext, useEffect, useState } from 'react'
-import { useControls } from 'leva'
+import React, { useCallback, useContext, useEffect, useState } from 'react'
+import { Leva, useControls } from 'leva'
 import { useSearchParams } from 'next/navigation'
 import { ActionEngineContext, makeAction } from '@/helpers/actionengine'
 import {
@@ -188,36 +188,42 @@ export default function Page() {
     const topicNode = action.getInput('topic')
     await topicNode.putAndFinalize(makeTextChunk(msg.text))
 
-    setChatMessagesFromAsyncNode(
-       action.getOutput('report'),
-      setMessages,
-    ).then()
+    setChatMessagesFromAsyncNode(action.getOutput('report'), setMessages).then()
     observeNestedActions(
-       action.getOutput('actions'),
+      action.getOutput('actions'),
       observeActionCallback,
     ).then()
   }
 
   return (
     <>
-      <div className='flex max-h-screen w-screen flex-row justify-center'>
-        <div className='flex w-full max-w-2xl flex-col items-center justify-center space-y-4 p-4'>
-          <Chat
-            name='Deep Research'
-            messages={messages}
-            sendMessage={sendMessage}
-            disableInput={!enableInput}
-            disabledInputMessage={disabledInputMessage}
-          />
+      <div className='flex h-screen w-full flex-row space-x-4'>
+        <div className='w-[360px] h-full bg-gray-50'>
+          <div className='w-full h-1/3'>
+            <Leva oneLineLabels flat fill titleBar={{ drag: false }} />
+          </div>
         </div>
-        <div className='flex w-full max-w-2xl flex-col items-center justify-center space-y-4 p-4'>
-          <Chat
-            name='Debug messages'
-            messages={thoughts}
-            sendMessage={async (_) => {}}
-            disableInput
-            disabledInputMessage='This is a read-only chat for generated content.'
-          />
+        <div className='flex flex-1 flex-row space-x-4'>
+          <div className='flex w-full flex-col items-center justify-center space-y-4 py-4'>
+            <Chat
+              name='Deep Research'
+              messages={messages}
+              sendMessage={sendMessage}
+              disableInput={!enableInput}
+              disabledInputMessage={disabledInputMessage}
+              className='h-full max-w-full w-full'
+            />
+          </div>
+          <div className='flex w-full flex-col items-center justify-center space-y-4 pr-4 py-4'>
+            <Chat
+              name='Debug messages'
+              messages={thoughts}
+              sendMessage={async (_) => {}}
+              disableInput
+              disabledInputMessage='This is a read-only chat for generated content.'
+              className='h-full max-w-full w-full'
+            />
+          </div>
         </div>
       </div>
     </>

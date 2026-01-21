@@ -13,25 +13,23 @@ const GenmediaExample = dynamic(
 
 export default function Page() {
   return (
-    <>
-      <Leva />
-      <>
-        <canvas hidden id='canvas' width='1024' height='1024'></canvas>
-        <div className=' flex w-fit flex-col flex-wrap items-center md:flex-row  lg:w-4/5'>
-          <div className='flex w-full flex-col items-start justify-center p-12 text-center md:w-2/5 md:text-left'>
-            <p className='w-full uppercase'></p>
-            <h1 className='my-4 text-5xl font-bold leading-tight'>
-              Action Engine x GenMedia
-            </h1>
-            <p className='mb-8 text-2xl leading-normal'></p>
-          </div>
-        </div>
+    <div className='flex h-screen w-full flex-row'>
+      <canvas hidden id='canvas' width='1024' height='1024'></canvas>
+      <div className='flex w-full flex-col items-center justify-center space-y-4'>
+        <h1 className='text-5xl font-bold leading-tight absolute top-12 left-12'>
+          Action Engine <br />x GenMedia
+        </h1>
 
-        <View className='absolute top-0 flex h-screen w-full flex-col items-center justify-center'>
-          <GenmediaExample />
+        <View className='h-full w-full'>
           <Common />
+          <GenmediaExample />
         </View>
-      </>
-    </>
+      </div>
+      <div className='flex w-[360px] h-full bg-zinc-100'>
+        <div className='w-full h-1/3'>
+          <Leva oneLineLabels flat fill titleBar={{ drag: false }} />
+        </div>
+      </div>
+    </div>
   )
 }

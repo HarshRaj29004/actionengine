@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { JSX, useEffect, useRef, useState } from 'react'
 import { marked } from 'marked'
+import { v4 as uuidv4 } from 'uuid'
 
 export interface ChatMessage {
   id: string
   text: string
+  children?: JSX.Element | JSX.Element[]
   sender: string
 }
 
@@ -26,35 +28,57 @@ export function Chat(props: ChatProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages])
 
-  const className =
-    props.className || 'mx-4 flex w-full max-w-full flex-row p-4 max-h-screen'
+  const className = props.className || 'h-full max-w-full w-full'
 
   const numRowsInInput = Math.max(1, input.split('\n').length)
+  const [nextMsgId, setNextMsgId] = useState(uuidv4())
+  // if one child, make it an array
+  const standardizedChildren = (msg: ChatMessage) => {
+    if (!msg.children) return undefined
+    if (Array.isArray(msg.children)) return msg.children
+    return [msg.children]
+  }
   return (
     <>
       <div className={className}>
-        <div className='flex max-h-full w-full max-w-full flex-col space-y-4 rounded-lg bg-white p-4 shadow-lg'>
+        <div className='flex max-h-full h-full w-full max-w-full flex-col space-y-4 rounded-lg bg-white p-4 shadow-lg'>
           <h1 className='max-h-fit text-center text-2xl font-bold'>
             {props.name || 'Echo action'}
           </h1>
-          <div className='max-h-full overflow-y-auto rounded-md border bg-gray-50 p-4'>
+          <div className='max-h-full h-full overflow-y-auto rounded-md border bg-gray-50 p-4'>
             {messages.map((msg, idx) => {
-              const markedText = { __html: marked(msg.text) }
+              const markedText = { __html: marked(msg.text || '') }
+              // @ts-ignore
+              // @ts-ignore
+              // @ts-ignore
               return (
                 <div
                   key={msg.id}
                   ref={idx === messages.length - 1 ? messagesEndRef : null}
-                  className={`mb-2 flex ${
+                  className={`mb-2 flex wrap ${
                     msg.sender === 'You' ? 'justify-end' : 'justify-start'
                   }`}
                 >
                   <div
-                    className={`rounded px-4 py-2 text-white ${
+                    className={`rounded px-4 py-2 text-white max-w-full ${
                       msg.sender === 'You' ? 'bg-green-500' : 'bg-blue-500'
                     }`}
                   >
                     <span className='block text-xs'>{msg.sender}</span>
-                    <div dangerouslySetInnerHTML={markedText} className='' />
+                    {msg.children ? (
+                      standardizedChildren(msg)?.map((child, cidx) => (
+                        <div key={`${msg.id}-${cidx}`} className='mt-2'>
+                          {child}
+                        </div>
+                      ))
+                    ) : (
+                      <div
+                        dangerouslySetInnerHTML={markedText}
+                        className='max-w-full'
+                        css='pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+                        a {white-space: pre-wrap; overflow-wrap: anywhere; }'
+                      />
+                    )}
                   </div>
                 </div>
               )
@@ -66,10 +90,11 @@ export function Chat(props: ChatProps) {
               e.preventDefault()
               if (!input.trim()) return
               await props.sendMessage({
-                id: `${Date.now()}`,
+                id: nextMsgId,
                 text: input,
                 sender: 'You',
               })
+              setNextMsgId(uuidv4())
               setInput('')
             }}
             className='mt-4 flex items-end space-x-2'
@@ -84,18 +109,17 @@ export function Chat(props: ChatProps) {
               }
               value={input}
               disabled={props.disableInput}
-              onKeyDown={(e) => {
+              onKeyDown={async (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
                   if (!input.trim()) return
 
-                  props
-                    .sendMessage({
-                      id: `${Date.now()}`,
-                      text: input,
-                      sender: 'You',
-                    })
-                    .then()
+                  await props.sendMessage({
+                    id: nextMsgId,
+                    text: input,
+                    sender: 'You',
+                  })
+                  setNextMsgId(uuidv4())
                   setInput('')
                 }
               }}

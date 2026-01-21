@@ -3,8 +3,8 @@
 import { Chat, ChatMessage } from '@/components/dom/Chat'
 
 import { AsyncNode, makeTextChunk } from '@helenapankov/actionengine'
-import { useCallback, useContext, useEffect, useState } from 'react'
-import { useControls } from 'leva'
+import React, { useCallback, useContext, useEffect, useState } from 'react'
+import { Leva, useControls } from 'leva'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { ActionEngineContext, makeAction } from '@/helpers/actionengine'
 import {
@@ -159,42 +159,46 @@ export default function Page() {
     const apiKeyNode = action.getInput('api_key')
     await apiKeyNode.putAndFinalize(makeTextChunk(apiKey))
 
+    setChatMessagesFromAsyncNode(action.getOutput('output'), setMessages).then()
     setChatMessagesFromAsyncNode(
-       action.getOutput('output'),
-      setMessages,
-    ).then()
-    setChatMessagesFromAsyncNode(
-       action.getOutput('thoughts'),
+      action.getOutput('thoughts'),
       setThoughts,
     ).then()
     setSessionTokenFromAction(
-       action.getOutput('new_session_token'),
+      action.getOutput('new_session_token'),
       setNextSessionToken,
     ).then()
   }
 
   return (
-    <>
-      <div className='flex max-h-screen w-screen flex-row justify-center'>
-        <div className='flex w-full max-w-2xl flex-col items-center justify-center space-y-4 p-4'>
+    <div className='flex h-screen w-full flex-row space-x-4'>
+      <div className='w-[360px] h-full bg-gray-50'>
+        <div className='w-full h-1/3'>
+          <Leva oneLineLabels flat fill titleBar={{ drag: false }} />
+        </div>
+      </div>
+      <div className='flex flex-1 flex-row space-x-4'>
+        <div className='flex flex-col w-full items-center justify-center space-y-4 py-4'>
           <Chat
             name={`${apiKey === 'ollama' ? 'Ollama' : 'Gemini'} session ${nextSessionToken}`}
             messages={messages}
             sendMessage={sendMessage}
             disableInput={!enableInput}
             disabledInputMessage={disabledInputMessage}
+            className='h-full max-w-full w-full'
           />
         </div>
-        <div className='flex w-full max-w-2xl flex-col items-center justify-center space-y-4 p-4'>
+        <div className='flex flex-col w-full items-center justify-center space-y-4 pr-4 py-4'>
           <Chat
             name='Thoughts'
             messages={thoughts}
             sendMessage={async (_) => {}}
             disableInput
             disabledInputMessage='This is a read-only chat for generated content.'
+            className='h-full max-w-full w-full'
           />
         </div>
       </div>
-    </>
+    </div>
   )
 }
