@@ -68,6 +68,8 @@ from_chunk = data.from_chunk
 get_global_settings = global_settings.get_global_settings
 get_global_act_settings = global_settings.get_global_act_settings
 
+buffer_wire_messages = eg_stream.buffer_wire_messages
+
 
 def run_threadsafe_if_coroutine(
     function_call_result, loop: asyncio.AbstractEventLoop | None = None

@@ -151,6 +151,15 @@ class WebRtcWireStream final : public WireStream {
 
   absl::Status Send(WireMessage message) override;
 
+  absl::Status SendWithoutBuffering(WireMessage message) override;
+  absl::Status AttachBufferingBehaviour(
+      WireMessageBufferingBehaviour* absl_nonnull sender) override;
+
+  bool HasAttachedBufferingBehaviour() const override {
+    act::MutexLock lock(&mu_);
+    return buffering_behaviour_ != nullptr;
+  }
+
   absl::StatusOr<std::optional<WireMessage>> Receive(
       absl::Duration timeout) override;
 
@@ -200,6 +209,8 @@ class WebRtcWireStream final : public WireStream {
   bool closed_ ABSL_GUARDED_BY(mu_) = false;
 
   bool half_closed_ ABSL_GUARDED_BY(mu_) = false;
+
+  WireMessageBufferingBehaviour* absl_nullable buffering_behaviour_ = nullptr;
 };
 
 absl::StatusOr<std::unique_ptr<WebRtcWireStream>> StartStreamWithSignalling(

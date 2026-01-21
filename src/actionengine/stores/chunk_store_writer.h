@@ -150,6 +150,7 @@ class ChunkStoreWriter {
   absl::flat_hash_map<std::string, WireStream*> peers_ ABSL_GUARDED_BY(mu_);
 
   mutable act::Mutex mu_;
+  mutable act::CondVar cv_ ABSL_GUARDED_BY(mu_);
 };
 
 template <>

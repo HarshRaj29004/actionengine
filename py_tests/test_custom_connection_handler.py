@@ -26,7 +26,7 @@ async def test_custom_connection_handler():
     await asyncio.sleep(0.2)  # Give the server time to start
 
     client_stream = actionengine.websockets.make_websocket_stream(
-        "127.0.0.2", "/", 20002
+        "127.0.0.1", "/", 20002
     )
     await asyncio.to_thread(client_stream.start)
 

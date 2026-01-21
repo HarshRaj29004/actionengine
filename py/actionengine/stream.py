@@ -22,7 +22,6 @@ from typing import Awaitable, Callable, Optional, ParamSpec, TypeVar
 from actionengine import _C
 from actionengine import data
 
-
 P = ParamSpec("P")
 T = TypeVar("T")
 
@@ -52,6 +51,9 @@ def _wrap_handler(
             return await asyncio.to_thread(handler, *args, **kwargs)
 
         return async_handler
+
+
+MergeWireMessagesWhileInScope = _C.service.MergeWireMessagesWhileInScope
 
 
 class WireStream(_C.service.WireStream):
@@ -115,6 +117,22 @@ class WireStream(_C.service.WireStream):
         If an exception was set via set_exception(), it is raised here.
         """
         ...
+
+
+def buffer_wire_messages(stream: _C.service.WireStream) -> MergeWireMessagesWhileInScope:
+    """Buffers messages on the given WireStream within the scope.
+
+    This function returns a context manager that, when entered, enables
+    message buffering on the provided WireStream. When exited, it disables
+    buffering.
+
+    Args:
+        stream: The WireStream to buffer messages on.
+
+    Returns:
+        A context manager that manages the buffering scope.
+    """
+    return _C.service.MergeWireMessagesWhileInScope(stream)
 
 
 class WireStreamAdapter(WireStream):

@@ -1,6 +1,6 @@
 add_library(
         actNet STATIC
-        client.cc
+        stream.cc
         stream.h
 )
 add_library(act::net ALIAS actNet)

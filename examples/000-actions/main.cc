@@ -140,16 +140,21 @@ absl::StatusOr<std::string> CallEcho(
   echo->BindSession(session);
   echo->BindStream(stream.get());
 
-  if (const auto status = echo->Call(); !status.ok()) {
-    LOG(ERROR) << "Failed to call action: " << status;
-    return "";
-  }
+  {
+    act::net::MergeWireMessagesWhileInScope merge(stream.get());
+    RETURN_IF_ERROR(stream->AttachBufferingBehaviour(&merge));
 
-  echo->GetInput("text") << Chunk{.metadata =
-                                      act::ChunkMetadata{.mimetype =
-                                                             "text/plain"},
-                                  .data = std::string(text)}
-                         << act::EndOfStream();
+    if (const auto status = echo->Call(); !status.ok()) {
+      LOG(ERROR) << "Failed to call action: " << status;
+      return "";
+    }
+
+    echo->GetInput("text") << Chunk{.metadata =
+                                        act::ChunkMetadata{.mimetype =
+                                                               "text/plain"},
+                                    .data = std::string(text)}
+                           << act::EndOfStream();
+  }
 
   std::ostringstream response;
   while (true) {

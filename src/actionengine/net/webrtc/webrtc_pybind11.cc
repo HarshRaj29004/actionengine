@@ -99,8 +99,16 @@ void BindWebRtcWireStream(py::handle scope, std::string_view name) {
       py::release_gil_before_calling_cpp_dtor())
       .def("send", &net::WebRtcWireStream::Send,
            py::call_guard<py::gil_scoped_release>())
-      .def("receive", &net::WebRtcWireStream::Receive,
-           py::call_guard<py::gil_scoped_release>())
+      .def(
+          "receive",
+          [](const std::shared_ptr<net::WebRtcWireStream>& self,
+             double timeout) {
+            const absl::Duration timeout_duration =
+                timeout < 0.0 ? absl::InfiniteDuration()
+                              : absl::Seconds(timeout);
+            return self->Receive(timeout_duration);
+          },
+          py::arg_v("timeout", -1.0), py::call_guard<py::gil_scoped_release>())
       .def("accept", &net::WebRtcWireStream::Accept,
            py::call_guard<py::gil_scoped_release>())
       .def("start", &net::WebRtcWireStream::Start,

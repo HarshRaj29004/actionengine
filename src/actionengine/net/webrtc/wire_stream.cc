@@ -436,7 +436,59 @@ WebRtcWireStream::~WebRtcWireStream() {
   } catch (const std::exception&) {}
 }
 
+absl::Status WebRtcWireStream::AttachBufferingBehaviour(
+    WireMessageBufferingBehaviour* sender) {
+  act::MutexLock lock(&mu_);
+
+  if (sender == nullptr) {
+    buffering_behaviour_ = nullptr;
+    return absl::OkStatus();
+  }
+
+  if (!status_.ok()) {
+    return status_;
+  }
+
+  if (half_closed_) {
+    return absl::FailedPreconditionError(
+        "WebRtcWireStream is half-closed, cannot attach a "
+        "buffering behaviour.");
+  }
+
+  if (closed_) {
+    return absl::FailedPreconditionError(
+        "WebRtcWireStream is closed, cannot attach a buffering behaviour.");
+  }
+
+  if (buffering_behaviour_ != nullptr) {
+    return absl::FailedPreconditionError(
+        "WebRtcWireStream already has a ReducingWireMessageSender attached");
+  }
+
+  buffering_behaviour_ = sender;
+  return absl::OkStatus();
+}
+
 absl::Status WebRtcWireStream::Send(WireMessage message) {
+  act::MutexLock lock(&mu_);
+
+  if (!status_.ok()) {
+    return status_;
+  }
+
+  if (half_closed_) {
+    return absl::FailedPreconditionError(
+        "WebRtcWireStream is half-closed, cannot send messages");
+  }
+
+  if (buffering_behaviour_ != nullptr) {
+    return buffering_behaviour_->Send(std::move(message));
+  }
+
+  return SendInternal(std::move(message));
+}
+
+absl::Status WebRtcWireStream::SendWithoutBuffering(WireMessage message) {
   act::MutexLock lock(&mu_);
 
   if (!status_.ok()) {
@@ -557,13 +609,31 @@ void WebRtcWireStream::AbortInternal(absl::Status status) {
     return;
   }
 
-  SendInternal(WireMessage{.node_fragments = {{
-                               .id = "__abort__",
-                               .data = ConvertTo<Chunk>(status).value(),
-                               .seq = 0,
-                               .continued = false,
-                           }}})
-      .IgnoreError();
+  WireMessage abort_message{
+      .node_fragments = {{
+          .id = "__abort__",
+          .data = ConvertTo<Chunk>(std::move(status)).value(),
+          .seq = 0,
+          .continued = false,
+      }}};
+
+  if (buffering_behaviour_ != nullptr) {
+    buffering_behaviour_->Send(abort_message).IgnoreError();
+    buffering_behaviour_->NoMoreSends();
+
+    mu_.unlock();
+    const absl::Status finalize_status = buffering_behaviour_->Finalize();
+    mu_.lock();
+
+    DCHECK(buffering_behaviour_ == nullptr)
+        << "Buffering behaviour must have been detached in Finalize.";
+    if (!finalize_status.ok()) {
+      LOG(ERROR) << "Error finalizing buffering behaviour during Abort: "
+                 << finalize_status;
+    }
+  } else {
+    SendInternal(std::move(abort_message)).IgnoreError();
+  }
 
   CloseOnError(absl::CancelledError("WebRtcWireStream aborted"));
 }
@@ -576,6 +646,18 @@ absl::Status WebRtcWireStream::GetStatus() const {
 absl::Status WebRtcWireStream::HalfCloseInternal() {
   if (half_closed_) {
     return absl::OkStatus();
+  }
+
+  if (buffering_behaviour_ != nullptr) {
+    buffering_behaviour_->NoMoreSends();
+
+    mu_.unlock();
+    const absl::Status status = buffering_behaviour_->Finalize();
+    mu_.lock();
+
+    DCHECK(buffering_behaviour_ == nullptr)
+        << "Buffering behaviour must have been detached in Finalize.";
+    RETURN_IF_ERROR(status);
   }
 
   half_closed_ = true;

@@ -150,9 +150,12 @@ absl::Status ChunkStoreWriter::RunWriteLoop() {
         buffer_.writer()->WriteUnlessCancelled(std::nullopt);
       }
     }
+    cv_.SignalAll();
   }
   accepts_puts_ = false;
   status.Update(chunk_store_->CloseWritesWithStatus(status));
+
+  cv_.SignalAll();
   return status;
 }
 
@@ -193,6 +196,22 @@ absl::StatusOr<int> ChunkStoreWriter::Put(Chunk value, int seq, bool final)
       })) {
     accepts_puts_ = false;
     return absl::CancelledError("Cancelled.");
+  }
+
+  bool peers_have_buffering_behaviours = false;
+  for (const auto& [peer_id, peer] : peers_) {
+    if (peer->HasAttachedBufferingBehaviour()) {
+      peers_have_buffering_behaviours = true;
+      break;
+    }
+  }
+  // If any peer has a reducing sender, we need to wait until all chunks
+  // have been written before returning, to ensure that the reducing sender
+  // has seen all chunks.
+  if (peers_have_buffering_behaviours) {
+    while (total_chunks_written_ < total_chunks_put_ && status_.ok()) {
+      cv_.Wait(&mu_);
+    }
   }
 
   return written_seq;

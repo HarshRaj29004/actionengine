@@ -50,6 +50,42 @@ namespace py = ::pybind11;
 void BindStream(py::handle scope, std::string_view name) {
   const std::string name_str(name);
 
+  py::classh<net::MergeWireMessagesWhileInScope>(
+      scope, "MergeWireMessagesWhileInScope",
+      py::release_gil_before_calling_cpp_dtor())
+      .def(
+          py::init<>([](WireStream* stream) {
+            return std::make_shared<net::MergeWireMessagesWhileInScope>(stream);
+          }),
+          py::arg("stream"), pybindings::keep_event_loop_memo())
+      .def("no_more_sends", &net::MergeWireMessagesWhileInScope::NoMoreSends)
+      .def("send", &net::MergeWireMessagesWhileInScope::Send,
+           py::arg("message"), py::call_guard<py::gil_scoped_release>())
+      .def("force_flush", &net::MergeWireMessagesWhileInScope::ForceFlush,
+           py::call_guard<py::gil_scoped_release>())
+      .def("get_status", &net::MergeWireMessagesWhileInScope::GetStatus)
+      .def("finalize", &net::MergeWireMessagesWhileInScope::Finalize,
+           py::call_guard<py::gil_scoped_release>())
+      .def(
+          "buffered_message",
+          [](net::MergeWireMessagesWhileInScope& self) -> WireMessage& {
+            return *self.buffered_message();
+          },
+          py::return_value_policy::reference)
+      .def(
+          "__enter__",
+          [](net::MergeWireMessagesWhileInScope* self)
+              -> absl::StatusOr<net::MergeWireMessagesWhileInScope*> {
+            RETURN_IF_ERROR(self->Attach());
+            return self;
+          },
+          py::return_value_policy::reference)
+      .def(
+          "__exit__",
+          [](net::MergeWireMessagesWhileInScope& self, py::handle, py::handle,
+             py::handle) -> absl::Status { return self.Finalize(); },
+          py::call_guard<py::gil_scoped_release>());
+
   py::classh<WireStream>(scope, absl::StrCat(name, "VirtualBase").c_str(),
                          py::release_gil_before_calling_cpp_dtor())
       .def("send", &WireStream::Send, py::call_guard<py::gil_scoped_release>())

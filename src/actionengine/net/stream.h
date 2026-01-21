@@ -22,6 +22,7 @@
 #include "actionengine/concurrency/concurrency.h"
 #include "actionengine/data/serialization.h"
 #include "actionengine/data/types.h"
+#include "stream.h"
 
 namespace act {
 
@@ -31,6 +32,10 @@ using ReceiveBytesT = std::function<std::optional<Bytes>()>;
 }  // namespace act
 
 namespace act {
+
+namespace net {
+class WireMessageBufferingBehaviour;
+}
 
 /**
  * An abstract base class for an ActionEngine stream.
@@ -43,6 +48,8 @@ namespace act {
  */
 class WireStream {
  public:
+  friend class net::WireMessageBufferingBehaviour;
+
   virtual ~WireStream() = default;
 
   /**
@@ -72,6 +79,14 @@ class WireStream {
    *   half-close.
    */
   virtual auto Send(WireMessage message) -> absl::Status = 0;
+
+  virtual absl::Status SendWithoutBuffering(WireMessage message);
+
+  virtual absl::Status AttachBufferingBehaviour(
+      net::WireMessageBufferingBehaviour* absl_nullable sender);
+
+  virtual bool HasAttachedBufferingBehaviour() const;
+
   /**
    * Receives an ActionEngine wire message from the stream.
    *
@@ -218,6 +233,61 @@ class WireStream {
     return static_cast<T*>(GetImpl());
   }
 };
+
+namespace net {
+class WireMessageBufferingBehaviour {
+ public:
+  virtual ~WireMessageBufferingBehaviour() = default;
+
+  virtual absl::Status Attach() = 0;
+
+  // Must not call any blocking operations on the stream.
+  virtual void NoMoreSends() = 0;
+
+  virtual absl::Status Send(WireMessage message) = 0;
+
+  virtual absl::Status ForceFlush() = 0;
+
+  virtual absl::Status GetStatus() const = 0;
+
+  // Finalize must 1) prevent further sends, and 2) flush any remaining
+  // buffered messages, 3) detach from the stream.
+  virtual absl::Status Finalize() = 0;
+
+  virtual WireMessage* absl_nonnull buffered_message() = 0;
+};
+
+class MergeWireMessagesWhileInScope final
+    : public WireMessageBufferingBehaviour {
+ public:
+  explicit MergeWireMessagesWhileInScope(WireStream* absl_nonnull stream);
+
+  ~MergeWireMessagesWhileInScope() override;
+
+  absl::Status Attach() override;
+
+  void NoMoreSends() override;
+
+  absl::Status Send(WireMessage message) override;
+
+  absl::Status ForceFlush() override;
+
+  absl::Status GetStatus() const override;
+
+  absl::Status Finalize() override;
+
+  WireMessage* absl_nonnull buffered_message() override;
+
+ private:
+  mutable act::Mutex mu_;
+
+  WireMessage buffered_message_;
+
+  bool send_allowed_ ABSL_GUARDED_BY(mu_) = true;
+  WireStream* absl_nonnull stream_;
+};
+
+}  // namespace net
 
 }  // namespace act
 
