@@ -327,58 +327,71 @@ async def generate_content_ollama(action: actionengine.Action):
     chat_input = await action["chat_input"].consume()
     messages.append({"role": "user", "content": chat_input})
 
-    try:
-        retries_left = 3
-        while retries_left > 0:
-            try:
-                stream = chat(
-                    model="deepseek-r1:8b",
-                    messages=messages,
-                    stream=True,
-                    think=True,
-                    options=Options(seed=random.randint(0, 2**31 - 1)),
-                )
-
-                output = ""
-                thought = ""
-
-                for chunk in stream:
-                    if "content" in chunk["message"]:
-                        await action["output"].put(chunk["message"]["content"])
-                        output += chunk["message"]["content"]
-
-                    if "thinking" in chunk["message"]:
-                        await action["thoughts"].put(
-                            chunk["message"]["thinking"]
-                        )
-                        thought += chunk["message"]["thinking"]
-
-                session_token = await save_message_turn(
-                    session_id,
-                    chat_input,
-                    output,
-                    thought,
-                    next_output_seq,
-                    next_thought_seq,
-                )
-                await action["new_session_token"].put_and_finalize(
-                    session_token
-                )
-                break
-            except Exception:
-                retries_left -= 1
-                await action["output"].put(
-                    f"Retrying due to an internal error... {retries_left} retries left."
-                )
-                if retries_left == 0:
-                    await action["output"].put(
-                        "Failed to connect to Gemini API."
+    with actionengine.buffer_wire_messages(
+        action.get_stream()
+    ) as buffer_context:
+        try:
+            retries_left = 3
+            while retries_left > 0:
+                try:
+                    stream = chat(
+                        model="deepseek-r1:8b",
+                        messages=messages,
+                        stream=True,
+                        think=True,
+                        options=Options(seed=random.randint(0, 2**31 - 1)),
                     )
-                    traceback.print_exc()
-                    return
-    finally:
-        await action["output"].finalize()
-        await action["thoughts"].finalize()
+
+                    output = ""
+                    thought = ""
+
+                    sent_tokens = 0
+                    flush_every = 20
+
+                    for chunk in stream:
+                        if "content" in chunk["message"]:
+                            await action["output"].put(
+                                chunk["message"]["content"]
+                            )
+                            output += chunk["message"]["content"]
+
+                        if "thinking" in chunk["message"]:
+                            await action["thoughts"].put(
+                                chunk["message"]["thinking"]
+                            )
+                            thought += chunk["message"]["thinking"]
+
+                        sent_tokens += 1
+                        if sent_tokens % flush_every == 0:
+                            await asyncio.to_thread(buffer_context.force_flush)
+
+                    session_token = await save_message_turn(
+                        session_id,
+                        chat_input,
+                        output,
+                        thought,
+                        next_output_seq,
+                        next_thought_seq,
+                    )
+                    await action["new_session_token"].put_and_finalize(
+                        session_token
+                    )
+                    break
+                except Exception:
+                    retries_left -= 1
+                    await action["output"].put(
+                        f"Retrying due to an internal error... {retries_left} retries left."
+                    )
+                    if retries_left == 0:
+                        await action["output"].put(
+                            "Failed to connect to Gemini API."
+                        )
+                        traceback.print_exc()
+                        return
+
+        finally:
+            await action["output"].finalize()
+            await action["thoughts"].finalize()
 
 
 async def generate_content(action: actionengine.Action):

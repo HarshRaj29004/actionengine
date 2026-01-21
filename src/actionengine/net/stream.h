@@ -281,6 +281,8 @@ class MergeWireMessagesWhileInScope final
  private:
   mutable act::Mutex mu_;
 
+  absl::Status ForceFlushInternal() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+
   WireMessage buffered_message_;
 
   bool send_allowed_ ABSL_GUARDED_BY(mu_) = true;

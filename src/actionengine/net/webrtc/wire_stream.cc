@@ -482,7 +482,10 @@ absl::Status WebRtcWireStream::Send(WireMessage message) {
   }
 
   if (buffering_behaviour_ != nullptr) {
-    return buffering_behaviour_->Send(std::move(message));
+    mu_.unlock();
+    absl::Status status = buffering_behaviour_->Send(std::move(message));
+    mu_.lock();
+    return status;
   }
 
   return SendInternal(std::move(message));

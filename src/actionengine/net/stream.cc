@@ -77,6 +77,11 @@ absl::Status MergeWireMessagesWhileInScope::Send(WireMessage message) {
 }
 
 absl::Status MergeWireMessagesWhileInScope::ForceFlush() {
+  act::MutexLock lock(&mu_);
+  return ForceFlushInternal();
+}
+
+absl::Status MergeWireMessagesWhileInScope::ForceFlushInternal() {
   if (buffered_message_.node_fragments.empty() &&
       buffered_message_.actions.empty()) {
     return absl::OkStatus();
@@ -95,7 +100,7 @@ absl::Status MergeWireMessagesWhileInScope::Finalize() {
   act::MutexLock lock(&mu_);
   send_allowed_ = false;
   absl::Status status;
-  status.Update(ForceFlush());
+  status.Update(ForceFlushInternal());
   status.Update(stream_->AttachBufferingBehaviour(nullptr));
   return status;
 }
