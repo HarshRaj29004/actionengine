@@ -1,4 +1,5 @@
 import asyncio
+import os
 import uuid
 
 import actionengine
@@ -74,7 +75,7 @@ async def read_text_chunks(
 def get_global_redis_client():
     if not hasattr(get_global_redis_client, "client"):
         get_global_redis_client.client = actionengine.redis.Redis.connect(
-            "localhost"
+            os.environ.get("REDIS_HOST", "localhost")
         )
     return get_global_redis_client.client
 
