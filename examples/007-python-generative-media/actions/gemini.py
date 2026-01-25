@@ -23,7 +23,7 @@ def get_gemini_client(api_key: str):
 def get_redis_client():
     if not hasattr(get_redis_client, "_redis_client"):
         get_redis_client._redis_client = actionengine.redis.Redis.connect(
-            "localhost"
+            os.environ.get("REDIS_HOST", "localhost")
         )
     return get_redis_client._redis_client
 

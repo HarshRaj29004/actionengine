@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from typing import Annotated, Any
 
 import actionengine
@@ -17,7 +18,7 @@ MAX_READ_TIMEOUT_SECONDS = 300  # Maximum read timeout in seconds
 def get_act_redis_client_for_sub():
     if not hasattr(get_act_redis_client_for_sub, "client"):
         get_act_redis_client_for_sub.client = actionengine.redis.Redis.connect(
-            "localhost"
+            os.environ.get("REDIS_HOST", "localhost")
         )
     return get_act_redis_client_for_sub.client
 
@@ -25,7 +26,7 @@ def get_act_redis_client_for_sub():
 def get_act_redis_client_for_pub():
     if not hasattr(get_act_redis_client_for_pub, "client"):
         get_act_redis_client_for_pub.client = actionengine.redis.Redis.connect(
-            "localhost"
+            os.environ.get("REDIS_HOST", "localhost")
         )
     return get_act_redis_client_for_pub.client
 

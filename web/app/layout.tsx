@@ -1,6 +1,7 @@
 import { Layout } from '@/components/dom/Layout'
 import '@/global.css'
 import { Suspense } from 'react'
+import StyledComponentsRegistry from '@/helpers/registry'
 
 export const metadata = {
   title: 'Action Engine Demos',
@@ -18,8 +19,10 @@ export default function RootLayout({ children }) {
       <head />
       <body>
         <Suspense>
-          {/* To avoid FOUT with styled-components wrap Layout with StyledComponentsRegistry https://beta.nextjs.org/docs/styling/css-in-js#styled-components */}
-          <Layout>{children}</Layout>
+          <StyledComponentsRegistry>
+            {/* To avoid FOUT with styled-components wrap Layout with StyledComponentsRegistry https://beta.nextjs.org/docs/styling/css-in-js#styled-components */}
+            <Layout>{children}</Layout>
+          </StyledComponentsRegistry>
         </Suspense>
       </body>
     </html>
