@@ -29,6 +29,8 @@ RUN git clone https://github.com/google-deepmind/actionengine /opt/actionengine
 COPY js/src /opt/actionengine/js/src
 COPY web/app /opt/actionengine/web/app
 COPY web/public /opt/actionengine/web/public
+COPY web/src /opt/actionengine/web/src
+COPY web/package.json /opt/actionengine/web/package.json
 
 ARG CACHEBUST=1
 
@@ -36,7 +38,7 @@ ARG CACHEBUST=1
 RUN echo $CACHEBUST && bash -lc "source $NVM_DIR/nvm.sh && cd /opt/actionengine/js && npm install && npm run build:bundle && yarn link"
 
 # 3) Install and link in the web app, and build it
-RUN echo $CACHEBUST && bash -lc "source $NVM_DIR/nvm.sh && cd /opt/actionengine/web && yarn install && yarn link @helenapankov/actionengine && yarn build"
+RUN echo $CACHEBUST && bash -lc "source $NVM_DIR/nvm.sh && cd /opt/actionengine/web && yarn install && yarn link @helenapankov/actionengine && yarn build --webpack"
 
 WORKDIR /opt/actionengine/web
 

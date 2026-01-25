@@ -295,13 +295,6 @@ absl::Status Action::Run() {
   bind_streams_on_inputs_default_ = false;
   bind_streams_on_outputs_default_ = true;
 
-  if (has_been_run_) {
-    return absl::FailedPreconditionError(
-        absl::StrFormat("Action %s with id=%s has already been run. "
-                        "Cannot run the action again.",
-                        schema_.name, id_));
-  }
-
   if (handler_ == nullptr) {
     return absl::FailedPreconditionError(
         absl::StrFormat("Action %s with id=%s has no handler bound. "

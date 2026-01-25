@@ -72,23 +72,6 @@ async def read_text_chunks(
         yield text
 
 
-def get_global_redis_client():
-    if not hasattr(get_global_redis_client, "client"):
-        get_global_redis_client.client = actionengine.redis.Redis.connect(
-            os.environ.get("REDIS_HOST", "localhost")
-        )
-    return get_global_redis_client.client
-
-
-def make_redis_chunk_store(node_id: str) -> actionengine.redis.ChunkStore:
-    redis_client = get_global_redis_client()
-    return actionengine.redis.ChunkStore(redis_client, node_id, -1)  # No TTL
-
-
-async def print_hello_async():
-    print("Hello from the Redis client example!", flush=True)
-
-
 async def main():
     global ACTION_REGISTRY, NODE_MAP
 
