@@ -144,7 +144,10 @@ void BindSession(py::handle scope, std::string_view name) {
                       py::release_gil_before_calling_cpp_dtor())
       .def(py::init([](NodeMap* node_map = nullptr,
                        ActionRegistry* action_registry = nullptr) {
-             return std::make_shared<Session>(node_map, action_registry);
+             auto session = std::make_shared<Session>();
+             session->set_node_map(node_map);
+             session->set_action_registry(*action_registry);
+             return session;
            }),
            py::arg("node_map"), py::arg_v("action_registry", nullptr))
       .def(MakeSameObjectRefConstructor<Session>())
@@ -159,20 +162,12 @@ void BindSession(py::handle scope, std::string_view name) {
       .def(
           "dispatch_from",
           [](const std::shared_ptr<Session>& self,
-             const std::shared_ptr<WireStream>& stream,
-             std::function<void()> on_done = {}) {
-            self->DispatchFrom(stream, std::move(on_done));
+             const std::shared_ptr<WireStream>& stream) {
+            self->StartStreamHandler(stream->GetId(), stream);
           },
           py::keep_alive<1, 2>(), py::arg("stream"),
-          py::arg_v("on_done", py::none()),
           py::call_guard<py::gil_scoped_release>())
-      .def(
-          "stop_dispatching_from",
-          [](const std::shared_ptr<Session>& self, WireStream* stream) {
-            self->StopDispatchingFrom(stream);
-          },
-          py::call_guard<py::gil_scoped_release>())
-      .def("dispatch_message", &Session::DispatchMessage,
+      .def("dispatch_wire_message", &Session::DispatchWireMessage,
            py::call_guard<py::gil_scoped_release>())
       .def(
           "get_node_map",
@@ -191,17 +186,21 @@ void BindSession(py::handle scope, std::string_view name) {
            py::call_guard<py::gil_scoped_release>());
 }
 
-ConnectionHandler MakeCppConnectionHandler(py::handle py_connection_handler) {
+StreamHandler MakeCppConnectionHandler(py::handle py_connection_handler) {
   py_connection_handler = py_connection_handler.inc_ref();
   if (py_connection_handler.is_none()) {
     return nullptr;
   }
 
   return [py_connection_handler](std::shared_ptr<WireStream> stream,
-                                 Session* session) -> absl::Status {
+                                 Session* absl_nonnull session,
+                                 absl::Duration recv_timeout) -> absl::Status {
     py::gil_scoped_acquire acquire;
-    py::object result =
-        py_connection_handler(std::move(stream), ShareWithNoDeleter(session));
+    const py::object result =
+        py_connection_handler(std::move(stream), ShareWithNoDeleter(session),
+                              recv_timeout == absl::InfiniteDuration()
+                                  ? -1.0
+                                  : absl::ToDoubleSeconds(recv_timeout));
     return result.cast<absl::Status>();
   };
 }
@@ -214,7 +213,7 @@ void BindService(py::handle scope, std::string_view name) {
              return std::make_shared<Service>(
                  action_registry,
                  py_connection_handler.is_none()
-                     ? RunSimpleSession
+                     ? internal::DefaultStreamHandler
                      : MakeCppConnectionHandler(py_connection_handler));
            }),
            py::arg("action_registry"),
@@ -235,39 +234,8 @@ void BindService(py::handle scope, std::string_view name) {
           py::call_guard<py::gil_scoped_release>())
       .def("get_session_keys", &Service::GetSessionKeys,
            py::call_guard<py::gil_scoped_release>())
-      .def(
-          "establish_connection",
-          [](const std::shared_ptr<Service>& self,
-             const std::shared_ptr<PyWireStream>& stream) {
-            return self->EstablishConnection(stream);
-          },
-          py::call_guard<py::gil_scoped_release>())
-      .def("join_connection", &Service::JoinConnection,
-           py::call_guard<py::gil_scoped_release>())
       .def("set_action_registry", &Service::SetActionRegistry,
            py::arg("action_registry"));
-}
-
-void BindStreamToSessionConnection(py::handle scope, std::string_view name) {
-  py::classh<StreamToSessionConnection>(scope, std::string(name).c_str())
-      .def(py::init(
-               [](const std::shared_ptr<WireStream>& stream, Session* session) {
-                 return std::make_shared<StreamToSessionConnection>(stream,
-                                                                    session);
-               }),
-           py::arg("stream"), py::arg("session"))
-      .def(MakeSameObjectRefConstructor<StreamToSessionConnection>())
-      .def("get_stream",
-           [](const StreamToSessionConnection& self) {
-             return ShareWithNoDeleter(
-                 dynamic_cast<PyWireStream*>(self.stream.get()));
-           })
-      .def("get_session",
-           [](const StreamToSessionConnection& self) {
-             return ShareWithNoDeleter(self.session);
-           })
-      .def_readwrite("stream_id", &StreamToSessionConnection::stream_id)
-      .def_readwrite("session_id", &StreamToSessionConnection::session_id);
 }
 
 pybind11::module_ MakeServiceModule(pybind11::module_ scope,
@@ -278,7 +246,6 @@ pybind11::module_ MakeServiceModule(pybind11::module_ scope,
   BindStream(service, "WireStream");
   BindSession(service, "Session");
   BindService(service, "Service");
-  BindStreamToSessionConnection(service, "StreamToSessionConnection");
 
   return service;
 }

@@ -16,8 +16,8 @@
 
 import asyncio
 import inspect
-from typing import Awaitable
 from typing import Callable
+from typing import Coroutine
 
 from actionengine import _C
 from actionengine import actions
@@ -30,9 +30,9 @@ WireStream = eg_stream.WireStream
 
 
 AsyncConnectionHandler = Callable[
-    [_C.service.WireStream, Session], Awaitable[None]
+    [_C.service.WireStream, Session, float], Coroutine[None, None, None]
 ]
-SyncConnectionHandler = Callable[[_C.service.WireStream, Session], None]
+SyncConnectionHandler = Callable[[_C.service.WireStream, Session, float], None]
 ConnectionHandler = SyncConnectionHandler | AsyncConnectionHandler
 
 
@@ -42,11 +42,16 @@ def wrap_async_handler(
     """Wraps the given handler to run in the event loop."""
     loop = asyncio.get_running_loop()
 
-    def sync_handler(stream: _C.service.WireStream, session: Session) -> None:
+    def sync_handler(
+        stream: _C.service.WireStream,
+        session: Session,
+        recv_timeout: float = -1.0,
+    ) -> None:
         result = asyncio.run_coroutine_threadsafe(
             handler(
                 stream,
                 utils.wrap_pybind_object(Session, session),
+                recv_timeout,
             ),
             loop,
         )
@@ -56,10 +61,15 @@ def wrap_async_handler(
 
 
 def wrap_sync_handler(handler: SyncConnectionHandler) -> SyncConnectionHandler:
-    def sync_handler(stream: _C.service.WireStream, session: Session) -> None:
+    def sync_handler(
+        stream: _C.service.WireStream,
+        session: Session,
+        recv_timeout: float = -1.0,
+    ) -> None:
         return handler(
             stream,
             utils.wrap_pybind_object(Session, session),
+            recv_timeout,
         )
 
     return sync_handler
@@ -83,35 +93,3 @@ class Service(_C.service.Service):
         connection_handler: ConnectionHandler | None = None,
     ):
         super().__init__(action_registry, wrap_handler(connection_handler))
-
-
-class StreamToSessionConnection(_C.service.StreamToSessionConnection):
-    """A Pythonic wrapper for the raw pybind11 StreamToSessionConnection bindings."""
-
-    def get_stream(self) -> _C.service.WireStream:
-        """Returns the stream."""
-        return super().get_stream()
-
-    def get_session(self) -> Session:
-        """Returns the session."""
-        return utils.wrap_pybind_object(
-            Session,
-            super().get_session(),
-        )
-
-    def make_action(
-        self,
-        registry: actions.ActionRegistry,
-        name: str,
-        action_id: str = "",
-    ) -> actions.Action:
-        """Creates an action."""
-        session = self.get_session()
-        action = registry.make_action(
-            name,
-            action_id,
-            node_map=session.get_node_map(),
-            stream=self.get_stream(),
-            session=session,
-        )
-        return action

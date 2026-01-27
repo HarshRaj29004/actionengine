@@ -1,0 +1,10 @@
+.message pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message a {
+  text-decoration: underline;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

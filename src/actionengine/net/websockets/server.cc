@@ -133,15 +133,13 @@ void WebsocketServer::Run() {
         break;
       }
 
-      mu_.unlock();
       auto stream = std::make_unique<BoostWebsocketStream>(std::move(socket));
       PrepareServerStream(stream.get()).IgnoreError();
-      auto connection = service_->EstablishConnection(
+      absl::Status status = service_->StartStreamHandler(
           std::make_shared<WebsocketWireStream>(std::move(stream)));
-      mu_.lock();
 
-      if (!connection.ok()) {
-        status_ = connection.status();
+      if (!status.ok()) {
+        status_ = status;
         DLOG(ERROR) << "WebsocketServer EstablishConnection failed: "
                     << status_;
         // continuing here
@@ -166,7 +164,6 @@ absl::Status WebsocketServer::CancelInternal() {
     return absl::OkStatus();
   }
   cancelled_ = true;
-  DLOG(INFO) << "WebsocketServer Cancel()";
   acceptor_->close();
   // util::GetDefaultAsioExecutionContext()->stop();
   main_loop_->Cancel();
@@ -204,18 +201,13 @@ absl::StatusOr<std::unique_ptr<WebsocketWireStream>> MakeWebsocketWireStream(
     std::string_view address, uint16_t port, std::string_view target,
     std::string_view id, PrepareStreamFn prepare_stream) {
 
-  absl::StatusOr<FiberAwareWebsocketStream> ws_stream =
+  absl::StatusOr<std::unique_ptr<FiberAwareWebsocketStream>> ws_stream =
       FiberAwareWebsocketStream::Connect(
           *util::GetDefaultAsioExecutionContext(), address, port, target,
           std::move(prepare_stream));
 
   if (!ws_stream.ok()) {
     return ws_stream.status();
-  }
-
-  if (absl::Status handshake_status = ws_stream->Start();
-      !handshake_status.ok()) {
-    return handshake_status;
   }
 
   std::string session_id = id.empty() ? GenerateUUID4() : std::string(id);

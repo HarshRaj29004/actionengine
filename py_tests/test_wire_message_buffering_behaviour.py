@@ -53,8 +53,9 @@ def make_webrtc_server_with_handler(
 async def handle_connection_for_test_buffering_works(
     stream: actionengine._C.webrtc.WebRtcWireStream,
     _: actionengine.Session,
+    recv_timeout: float = -1.0,
 ):
-    received = await asyncio.to_thread(stream.receive)
+    received = await asyncio.to_thread(stream.receive, recv_timeout)
     assert received is None  # half-closed without messages
 
     with actionengine.buffer_wire_messages(stream):
@@ -122,8 +123,9 @@ async def test_buffering_works():
 async def handle_connection_for_test_force_flush_works(
     stream: actionengine._C.webrtc.WebRtcWireStream,
     _: actionengine.Session,
+    recv_timeout: float = -1.0,
 ):
-    received = await asyncio.to_thread(stream.receive)
+    received = await asyncio.to_thread(stream.receive, recv_timeout)
     assert received is None  # half-closed without messages
 
     with actionengine.buffer_wire_messages(stream) as buffer_context:
@@ -188,8 +190,9 @@ async def test_force_flush_works():
 async def handle_connection_for_test_half_close_works_with_buffering(
     stream: actionengine._C.webrtc.WebRtcWireStream,
     _: actionengine.Session,
+    recv_timeout: float = -1.0,
 ):
-    received = await asyncio.to_thread(stream.receive)
+    received = await asyncio.to_thread(stream.receive, recv_timeout)
     assert received is None  # half-closed without messages
 
     with actionengine.buffer_wire_messages(stream):
@@ -242,6 +245,7 @@ async def test_half_close_works_with_buffering():
 async def handle_connection_for_test_headers(
     stream: actionengine._C.webrtc.WebRtcWireStream,
     _: actionengine.Session,
+    recv_timeout: float = -1.0,
 ):
     with actionengine.buffer_wire_messages(stream):
         wire_message_1 = actionengine.WireMessage()

@@ -61,8 +61,8 @@ export class LocalChunkStore implements ChunkStore {
   constructor(id: string = '') {
     this.id = id;
 
-    this.seqIdToArrivalOffset = new Map() as Map<number, number>;
-    this.arrivalOffsetToSeq = new Map() as Map<number, number>;
+    this.seqIdToArrivalOffset = new Map<number, number>();
+    this.arrivalOffsetToSeq = new Map<number, number>();
 
     this.chunks = new Map() as Map<number, Chunk>;
 

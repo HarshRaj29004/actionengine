@@ -55,11 +55,10 @@ class WebsocketServer {
 
  private:
   absl::Status CancelInternal() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
-
   absl::Status JoinInternal() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
-  act::Service* absl_nonnull const service_;
   std::unique_ptr<boost::asio::ip::tcp::acceptor> acceptor_;
+  act::Service* absl_nonnull const service_;
 
   mutable act::Mutex mu_;
   std::unique_ptr<thread::Fiber> main_loop_;

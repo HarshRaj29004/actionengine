@@ -26,6 +26,8 @@
 #include <actionengine/service/service.h>
 #include <actionengine/util/random.h>
 
+#include "actionengine/util/metrics.h"
+
 ABSL_FLAG(uint16_t, port, 20000, "Port to try to bind the WebRTC server to.");
 
 // Simply some type aliases to make the code more readable.
@@ -198,9 +200,16 @@ absl::Status Main(int argc, char** argv) {
       /*signalling_url=*/"wss://actionengine.dev:19001",
       /*rtc_config=*/std::move(rtc_config));
   server.Run();
+  absl::SleepFor(absl::Seconds(1));
+
+  act::MetricStore& pmetrics = act::GetGlobalMetricStore();
+  absl::Time metrics_last_reported = absl::Now();
 
   act::NodeMap node_map;
-  act::Session session(&node_map, &action_registry);
+  act::Session session;
+  LOG(INFO) << "client session " << &session;
+  session.set_action_registry(action_registry);
+  session.set_node_map(&node_map);
   std::string identity = act::GenerateUUID4();
   LOG(INFO) << "Identity: " << identity;
   ASSIGN_OR_RETURN(
@@ -208,7 +217,7 @@ absl::Status Main(int argc, char** argv) {
       act::net::StartStreamWithSignalling(identity, "echo-server-1",
                                           "wss://actionengine.dev:19001"));
 
-  session.DispatchFrom(stream);
+  session.StartStreamHandler(identity, stream);
 
   std::string text = "test text to skip the long startup logs";
   std::cout << "Sending: " << text << std::endl;

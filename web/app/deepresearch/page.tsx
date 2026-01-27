@@ -158,7 +158,7 @@ export default function Page() {
         ])
         return
       }
-      if (!(await actionEngine.nodeMap.hasNode(nodeId))) {
+      if (!actionEngine.nodeMap.hasNode(nodeId)) {
         setThoughts((prev) => [
           ...prev,
           {
@@ -198,7 +198,7 @@ export default function Page() {
   return (
     <>
       <div className='flex h-screen w-full flex-row space-x-4'>
-        <div className='w-[360px] h-full bg-gray-50'>
+        <div className='w-[360px] h-full bg-zinc-600'>
           <div className='w-full h-1/3'>
             <Leva oneLineLabels flat fill titleBar={{ drag: false }} />
           </div>

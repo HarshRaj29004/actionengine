@@ -171,9 +171,11 @@ void ActionContext::CancelContextInternal() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     action_fiber->Cancel();
   }
   cancelled_ = true;
-  DLOG(INFO) << absl::StrFormat(
-      "Action context cancelled, actions pending: %v.",
-      running_actions_.size());
+  if (!running_actions_.empty()) {
+    DLOG(INFO) << absl::StrFormat(
+        "Action context cancelled, actions pending: %v.",
+        running_actions_.size());
+  }
 }
 
 std::unique_ptr<thread::Fiber> ActionContext::ExtractActionFiber(
@@ -190,15 +192,17 @@ void ActionContext::WaitForActionsToDetachInternal(
   const absl::Time fiber_cancel_by = now + cancel_timeout;
   const absl::Time expect_actions_to_detach_by = now + detach_timeout;
 
+  if (running_actions_.empty()) {
+    return;
+  }
+
   while (!running_actions_.empty()) {
     if (cv_.WaitWithDeadline(&mu_, fiber_cancel_by)) {
       break;
     }
   }
-
   if (running_actions_.empty()) {
     DLOG(INFO) << "All actions have detached cooperatively.";
-    return;
   }
 
   CancelContextInternal();
@@ -213,131 +217,123 @@ void ActionContext::WaitForActionsToDetachInternal(
   }
 }
 
-static ActionRegistry MakeSystemActionRegistry() {
-  ActionRegistry registry;
-
-  const ActionSchema& list_running_actions_schema =
-      GetListRunningActionsSchema();
-  registry.Register(list_running_actions_schema.name,
-                    list_running_actions_schema, ListRunningActionsHandler);
-
-  const ActionSchema& cancel_action_schema = GetCancelActionSchema();
-  registry.Register(cancel_action_schema.name, cancel_action_schema,
-                    CancelActionHandler);
-
-  const ActionSchema& ping_action_schema = GetPingActionSchema();
-  registry.Register(ping_action_schema.name, ping_action_schema,
-                    PingActionHandler);
-
-  return registry;
+internal::ConnectionCtx::ConnectionCtx(Session* session,
+                                       std::shared_ptr<WireStream> stream,
+                                       StreamHandler handler,
+                                       absl::Duration recv_timeout)
+    : session_(session),
+      stream_(std::move(stream)),
+      status_(std::make_shared<absl::Status>(absl::StatusCode::kOk, "")) {
+  DCHECK(stream_ != nullptr);
+  fiber_ = thread::NewTree(
+      {}, [status = status_, session = session_, stream_ = stream_,
+           handler = std::move(handler), recv_timeout]() noexcept {
+        *status = handler(stream_, session, recv_timeout);
+      });
 }
 
-Session::Session(NodeMap* absl_nonnull node_map,
-                 ActionRegistry* absl_nullable action_registry,
-                 ChunkStoreFactory chunk_store_factory)
-    : node_map_(node_map),
-      action_registry_(action_registry),
-      system_action_registry_(MakeSystemActionRegistry()),
-      chunk_store_factory_(std::move(chunk_store_factory)),
-      action_context_(std::make_unique<ActionContext>()) {}
-
-Session::~Session() {
-  act::MutexLock lock(&mu_);
-  action_context_->CancelContext();
-  action_context_->WaitForActionsToDetach();
-  for (auto& [stream, _] : dispatch_tasks_) {
-    // Abort each stream to cancel Receive in the dispatchers. If already
-    // aborted or half-closed, this is a no-op.
-    stream->Abort(absl::CancelledError("Session is being destroyed."));
+internal::ConnectionCtx::~ConnectionCtx() {
+  if (fiber_ != nullptr) {
+    fiber_->Cancel();
+    fiber_->Join();
   }
-  JoinDispatchers(/*cancel=*/true);
+  fiber_.reset();
+  stream_.reset();
 }
 
-AsyncNode* absl_nonnull Session::GetNode(
-    const std::string_view id,
-    const ChunkStoreFactory& chunk_store_factory) const {
-  ChunkStoreFactory factory = chunk_store_factory;
-  if (factory == nullptr) {
-    factory = chunk_store_factory_;
-  }
-  return node_map_->Get(id, factory);
-}
-
-std::shared_ptr<AsyncNode> Session::BorrowNode(
-    std::string_view id, const ChunkStoreFactory& chunk_store_factory) const {
-  ChunkStoreFactory factory = chunk_store_factory;
-  if (factory == nullptr) {
-    factory = chunk_store_factory_;
-  }
-  return node_map_->Borrow(id, factory);
-}
-
-void Session::DispatchFrom(const std::shared_ptr<WireStream>& stream,
-                           absl::AnyInvocable<void()> on_done) {
-  act::MutexLock lock(&mu_);
-
-  if (joined_) {
+void internal::ConnectionCtx::CancelHandler() const {
+  if (fiber_ == nullptr) {
     return;
   }
-
-  if (dispatch_tasks_.contains(stream.get())) {
-    return;
-  }
-
-  dispatch_tasks_.emplace(
-      stream.get(),
-      thread::NewTree(
-          {}, [this, stream, on_done = std::move(on_done)]() mutable {
-            while (true) {
-              absl::StatusOr<std::optional<WireMessage>> message =
-                  stream->Receive(recv_timeout());
-              if (!message.ok()) {
-                DLOG(ERROR) << "Failed to receive message: " << message.status()
-                            << " from stream: " << stream->GetId()
-                            << ". Stopping dispatch.";
-              }
-              if (!message.ok()) {
-                stream->Abort(message.status());
-                break;
-              }
-              if (!message->has_value()) {
-                stream->HalfClose();
-                break;
-              }
-              if (absl::Status dispatch_status =
-                      DispatchMessage(**std::move(message), stream.get());
-                  !dispatch_status.ok()) {
-                DLOG(ERROR) << "Failed to dispatch message: " << dispatch_status
-                            << " from stream: " << stream->GetId()
-                            << ". Stopping dispatch.";
-                break;
-              }
-            }
-
-            if (on_done) {
-              std::move(on_done)();
-            }
-
-            std::unique_ptr<thread::Fiber> dispatcher_fiber;
-            {
-              act::MutexLock cleanup_lock(&mu_);
-              if (const auto node = dispatch_tasks_.extract(stream.get());
-                  !node.empty()) {
-                dispatcher_fiber = std::move(node.mapped());
-              }
-            }
-            if (dispatcher_fiber == nullptr) {
-              return;
-            }
-            thread::Detach(std::move(dispatcher_fiber));
-          }));
+  fiber_->Cancel();
 }
 
-static absl::Status ReportDispatchStatusToCallerStream(
-    WireStream* absl_nonnull stream, const std::string& action_id,
-    const absl::Status& status) {
+absl::Status internal::ConnectionCtx::Join() {
+  if (fiber_ == nullptr) {
+    return *status_;
+  }
+  fiber_->Join();
+  fiber_.reset();
+  stream_.reset();
+  return *status_;
+}
+
+std::unique_ptr<thread::Fiber> internal::ConnectionCtx::ExtractHandlerFiber() {
+  std::unique_ptr<thread::Fiber> fiber = std::move(fiber_);
+  fiber_ = nullptr;
+  return fiber;
+}
+
+bool IsReservedActionName(std::string_view name) {
+  static auto* reserved_names = new absl::flat_hash_set<std::string_view>{
+      "__ping", "__list_running_actions", "__cancel_action"};
+  return reserved_names->contains(name);
+}
+
+StreamHandler internal::EnsureHalfClosesOrAbortsStream(StreamHandler handler) {
+  return [handler = std::move(handler)](std::shared_ptr<WireStream> stream,
+                                        Session* absl_nonnull session,
+                                        absl::Duration recv_timeout) {
+    absl::Status status;
+    try {
+      status = handler(stream, session, recv_timeout);
+    } catch (const std::exception& e) {
+      // Even though the whole Action Engine is noexcept, handlers might
+      // not be: external library calls, rogue Python handlers, etc.
+      status = absl::InternalError(
+          absl::StrCat("Unhandled exception in stream handler: ", e.what()));
+    }
+
+    // If already half-closed or aborted (as should be by the handler),
+    // these are no-ops.
+    DCHECK(stream != nullptr);
+    if (status.ok()) {
+      stream->HalfClose();
+    } else {
+      stream->Abort(status);
+    }
+
+    return status;
+  };
+}
+
+absl::Status internal::DefaultStreamHandler(std::shared_ptr<WireStream> stream,
+                                            Session* session,
+                                            absl::Duration recv_timeout) {
+  if (stream == nullptr) {
+    return absl::InvalidArgumentError("Stream cannot be null");
+  }
+
+  absl::Status status;
+  while (!thread::Cancelled()) {
+    absl::StatusOr<std::optional<WireMessage>> message =
+        stream->Receive(recv_timeout);
+    if (!message.ok()) {
+      status = message.status();
+      stream->Abort(status);
+      break;
+    }
+    if (!message->has_value()) {
+      break;
+    }
+    status =
+        session->DispatchWireMessage(std::move(message)->value(), stream.get());
+  }
+
+  if (thread::Cancelled()) {
+    status = absl::CancelledError("Service is shutting down.");
+  }
+
+  return status;
+}
+
+static absl::Status ReturnDispatchStatusReportingToCallerStream(
+    WireStream* stream, const std::string& action_id, absl::Status status) {
+  if (stream == nullptr) {
+    return status;
+  }
   std::vector fragments = {NodeFragment{
-      .id = absl::StrCat(action_id, "#", "__dispatch_status__"),
+      .id = Action::MakeNodeId(action_id, "__dispatch_status__"),
       .data = ConvertTo<Chunk>(status).value(),
       .seq = 0,
       .continued = false,
@@ -348,217 +344,220 @@ static absl::Status ReportDispatchStatusToCallerStream(
   // because the caller may already not be listening to __dispatch_status__.
   if (!status.ok()) {
     fragments.push_back(NodeFragment{
-        .id = absl::StrCat(action_id, "#", "__status__"),
+        .id = Action::MakeNodeId(action_id, "__status__"),
         .data = ConvertTo<Chunk>(status).value(),
         .seq = 0,
         .continued = false,
     });
   }
 
-  return stream->Send(WireMessage{.node_fragments = std::move(fragments)});
-}
-
-absl::Status Session::DispatchMessage(WireMessage message,
-                                      WireStream* absl_nullable stream) {
-  act::MutexLock lock(&mu_);
-  if (joined_) {
-    return absl::FailedPreconditionError(
-        "Session has been joined, cannot dispatch messages.");
-  }
-  absl::Status status;
-
-  std::vector<std::string> error_messages;
-
-  for (auto& node_fragment : message.node_fragments) {
-    const std::shared_ptr<AsyncNode> node = BorrowNode(node_fragment.id);
-    const std::string node_id = node_fragment.id;
-    if (absl::Status node_fragment_status = node->Put(std::move(node_fragment));
-        !node_fragment_status.ok()) {
-      error_messages.push_back(
-          absl::StrCat("node fragment ", node_id, ": ", node_fragment_status));
-      status.Update(node_fragment_status);
-    }
-  }
-
-  for (auto& [action_id, action_name, inputs, outputs, headers] :
-       message.actions) {
-
-    if (!action_registry_->IsRegistered(action_name) &&
-        !system_action_registry_.IsRegistered(action_name)) {
-      std::string action_not_found_msg =
-          absl::StrCat("Action not found: ", action_name);
-      error_messages.push_back(action_not_found_msg);
-      status.Update(absl::NotFoundError(action_not_found_msg));
-      if (stream != nullptr) {
-        ReportDispatchStatusToCallerStream(
-            stream, action_id, absl::NotFoundError(action_not_found_msg))
-            .IgnoreError();
-      }
-      continue;
-    }
-
-    absl::StatusOr<std::unique_ptr<Action>> action_or_status;
-    if (system_action_registry_.IsRegistered(action_name) &&
-        action_name != "__list_actions") {
-      action_or_status = system_action_registry_.MakeAction(
-          action_name, action_id, std::move(inputs), std::move(outputs));
-    } else {
-      action_or_status = action_registry_->MakeAction(
-          action_name, action_id, std::move(inputs), std::move(outputs));
-    }
-    if (!action_or_status.ok()) {
-      error_messages.push_back(absl::StrCat("action ", action_name, " ",
-                                            action_id, ": ",
-                                            action_or_status.status()));
-      status.Update(action_or_status.status());
-      if (stream != nullptr) {
-        ReportDispatchStatusToCallerStream(stream, action_id,
-                                           action_or_status.status())
-            .IgnoreError();
-      }
-      continue;
-    }
-
-    std::unique_ptr<Action> action = std::move(*action_or_status);
-    action->BindNodeMap(node_map_);
-    action->BindSession(this);
-    action->BindStream(stream);
-
-    // The session class is intended to represent a session where there is
-    // another party involved. In this case, we want to clear inputs and outputs
-    // after the action is run, because they will already have been sent to the
-    // other party, and we don't want to keep them around locally.
-    action->ClearInputsAfterRun(true);
-    action->ClearOutputsAfterRun(true);
-
-    absl::Status action_dispatch_status =
-        action_context_->Dispatch(std::move(action));
-    if (!action_dispatch_status.ok()) {
-      error_messages.push_back(absl::StrCat("action ", action_name, " ",
-                                            action_id, ": ",
-                                            action_dispatch_status));
-      status.Update(action_dispatch_status);
-      if (stream != nullptr) {
-        ReportDispatchStatusToCallerStream(stream, action_id,
-                                           action_dispatch_status)
-            .IgnoreError();
-      }
-    }
-  }
-
-  if (!status.ok()) {
-    DLOG(ERROR) << "Failed to dispatch message. Details:\n"
-                << absl::StrJoin(error_messages, ";\n");
-  }
+  status.Update(
+      stream->Send(WireMessage{.node_fragments = std::move(fragments)}));
   return status;
 }
 
-void Session::StopDispatchingFrom(WireStream* absl_nonnull stream) {
-  std::unique_ptr<thread::Fiber> task;
-  {
-    act::MutexLock lock(&mu_);
-    if (const auto node = dispatch_tasks_.extract(stream); !node.empty()) {
-      task = std::move(node.mapped());
-    }
-
-    if (task == nullptr) {
-      return;
-    }
-    task->Cancel();
-  }
-
-  task->Join();
-}
-
-void Session::StopDispatchingFromAll() {
+Session::~Session() {
   act::MutexLock lock(&mu_);
-  JoinDispatchers(/*cancel=*/true);
-}
 
-void Session::JoinDispatchers(bool cancel) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
-  joined_ = true;
+  // First, gracefully cancel all actions: they might still want to write
+  // to nodes.
+  action_context_.CancelContext();
+  action_context_.WaitForActionsToDetach();
 
-  std::vector<std::unique_ptr<thread::Fiber>> tasks_to_join;
-  for (auto& [_, task] : dispatch_tasks_) {
-    tasks_to_join.push_back(std::move(task));
+  // // Flush writers as our actions might have put data that has not yet
+  // // been replicated to the streams.
+  // if (node_map_ != nullptr) {
+  //   node_map_->FlushAllWriters();
+  // }
+
+  for (auto& [_, connection] : connections_) {
+    connection->CancelHandler();
   }
-
-  if (cancel) {
-    for (const auto& task : tasks_to_join) {
-      task->Cancel();
-    }
-  }
-  for (const auto& task : tasks_to_join) {
+  for (auto& [_, connection] : connections_) {
+    // release the lock because connection handlers may use action
+    // registry, node map, etc.
     mu_.unlock();
-    task->Join();
+    connection->Join().IgnoreError();
     mu_.lock();
   }
 }
 
-const ActionSchema& GetListRunningActionsSchema() {
-  static const ActionSchema* kListRunningActionsSchema = new ActionSchema{
-      .name = "__list_running_actions",
-      .inputs = {},
-      .outputs = {{"action_ids", "text/plain"}},
-  };
-  return *kListRunningActionsSchema;
+void Session::StartStreamHandler(std::string_view id,
+                                 std::shared_ptr<WireStream> stream,
+                                 StreamHandler handler,
+                                 absl::Duration recv_timeout) {
+  act::MutexLock lock(&mu_);
+  connections_.emplace(
+      id, std::make_unique<internal::ConnectionCtx>(
+              this, std::move(stream),
+              internal::EnsureHalfClosesOrAbortsStream(std::move(handler)),
+              recv_timeout));
 }
 
-absl::Status ListRunningActionsHandler(const std::shared_ptr<Action>& action) {
-  const Session* absl_nullable session = action->GetSession();
-  if (session == nullptr) {
-    return absl::FailedPreconditionError(
-        "Cannot list actions: action is not bound to a session.");
+std::unique_ptr<internal::ConnectionCtx> Session::ExtractStreamHandler(
+    std::string_view id) {
+  act::MutexLock lock(&mu_);
+  const auto map_node = connections_.extract(id);
+  if (map_node.empty()) {
+    return nullptr;
   }
-  std::vector<std::shared_ptr<Action>> running_actions =
-      session->ListRunningActions();
+  return std::move(map_node.mapped());
+}
 
-  AsyncNode* output = action->GetOutput("action_ids");
-  if (output == nullptr) {
-    return absl::FailedPreconditionError(
-        "Action has no 'action_ids' output. Cannot list running actions.");
+absl::flat_hash_map<std::string, std::unique_ptr<internal::ConnectionCtx>>
+Session::ExtractAllStreamHandlers() {
+  act::MutexLock lock(&mu_);
+  auto extracted_connections = std::move(connections_);
+  connections_.clear();
+  return extracted_connections;
+}
+
+absl::Status Session::DispatchNodeFragment(NodeFragment node_fragment) {
+  act::MutexLock lock(&mu_);
+  return DispatchNodeFragmentInternal(std::move(node_fragment));
+}
+
+absl::Status Session::DispatchActionMessage(ActionMessage action_message,
+                                            WireStream* origin_stream) {
+  act::MutexLock lock(&mu_);
+  return DispatchActionMessageInternal(std::move(action_message),
+                                       origin_stream);
+}
+
+absl::Status Session::DispatchWireMessage(WireMessage message,
+                                          WireStream* origin_stream) {
+  act::MutexLock lock(&mu_);
+  return DispatchWireMessageInternal(std::move(message), origin_stream);
+}
+
+size_t Session::GetNumActiveConnections() const {
+  act::MutexLock lock(&mu_);
+  return connections_.size();
+}
+
+AsyncNode* Session::GetNode(std::string_view id,
+                            const ChunkStoreFactory& factory) const {
+  act::MutexLock lock(&mu_);
+  if (!node_map_) {
+    return nullptr;
+  }
+  return node_map_->Get(id, factory);
+}
+
+NodeMap* Session::node_map() const {
+  act::MutexLock lock(&mu_);
+  return node_map_;
+}
+
+void Session::set_node_map(NodeMap* absl_nullable node_map) {
+  act::MutexLock lock(&mu_);
+  if (node_map_ != nullptr) {
+    node_map_->FlushAllWriters();
+  }
+  node_map_ = node_map;
+}
+
+ActionRegistry* Session::action_registry() {
+  act::MutexLock lock(&mu_);
+  if (!action_registry_) {
+    return nullptr;
+  }
+  return &*action_registry_;
+}
+
+void Session::set_action_registry(
+    std::optional<ActionRegistry> action_registry) {
+  act::MutexLock lock(&mu_);
+  action_registry_ = std::move(action_registry);
+}
+
+absl::Status Session::DispatchNodeFragmentInternal(
+    NodeFragment node_fragment) const {
+  if (!node_map_) {
+    return absl::FailedPreconditionError("Node map not set.");
+  }
+  return node_map_->Get(node_fragment.id)->Put(std::move(node_fragment));
+}
+
+absl::Status Session::DispatchReservedActionInternal(
+    ActionMessage action_message, WireStream* origin_stream) {
+  return absl::UnimplementedError(absl::StrCat(
+      "Reserved actions are not implemented. Tried ", action_message.name));
+}
+
+absl::Status Session::DispatchActionMessageInternal(
+    ActionMessage action_message, WireStream* origin_stream) {
+  if (IsReservedActionName(action_message.name)) {
+    // Reserved actions might use custom logic dealing with dispatch statuses,
+    // thus raw return:
+    return DispatchReservedActionInternal(std::move(action_message));
   }
 
-  for (const auto& running_action : running_actions) {
-    RETURN_IF_ERROR(output->Put({
-        .metadata = ChunkMetadata{.mimetype = "text/plain"},
-        .data = running_action->GetId(),
-    }));
+  if (!action_registry_) {
+    return ReturnDispatchStatusReportingToCallerStream(
+        origin_stream, action_message.id,
+        absl::FailedPreconditionError("Action registry not set."));
   }
 
-  return output->Put(EndOfStream());
-}
-
-const ActionSchema& GetCancelActionSchema() {
-  static const ActionSchema* kCancelActionSchema = new ActionSchema{
-      .name = "__cancel_action",
-      .inputs = {{"action_id", "text/plain"}},
-      .outputs = {},
-  };
-  return *kCancelActionSchema;
-}
-
-absl::Status CancelActionHandler(const std::shared_ptr<Action>& action) {
-  ASSIGN_OR_RETURN(const auto action_id,
-                   action->GetInput("action_id")->ConsumeAs<std::string>());
-  const Session* absl_nullable session = action->GetSession();
-  if (session == nullptr) {
-    return absl::FailedPreconditionError(
-        "Cannot cancel action: action is not bound to a session.");
+  if (!action_registry_->IsRegistered(action_message.name)) {
+    return ReturnDispatchStatusReportingToCallerStream(
+        origin_stream, action_message.id,
+        absl::NotFoundError(absl::StrCat(
+            "Action not found in registry: ", action_message.name, ".")));
   }
-  return session->CancelAction(action_id);
+
+  absl::StatusOr<std::unique_ptr<Action>> action_or_status =
+      action_registry_->MakeAction(action_message.name, action_message.id,
+                                   std::move(action_message.inputs),
+                                   std::move(action_message.outputs));
+  if (!action_or_status.ok()) {
+    return ReturnDispatchStatusReportingToCallerStream(
+        origin_stream, action_message.id, action_or_status.status());
+  }
+
+  std::unique_ptr<Action> action = *std::move(action_or_status);
+  action->BindNodeMap(&*node_map_);
+  action->BindSession(this);
+  action->BindStream(origin_stream);
+
+  // The session class is intended to represent a session where there is
+  // another party involved. In this case, we want to clear inputs and outputs
+  // after the action is run, because they will already have been sent to the
+  // other party, and we don't want to keep them around locally.
+  action->ClearInputsAfterRun(true);
+  action->ClearOutputsAfterRun(true);
+
+  return action_context_.Dispatch(std::move(action));
 }
 
-const ActionSchema& GetPingActionSchema() {
-  static const ActionSchema* kPingActionSchema = new ActionSchema{
-      .name = "__ping",
-      .inputs = {},
-      .outputs = {},
-  };
-  return *kPingActionSchema;
-}
+absl::Status Session::DispatchWireMessageInternal(WireMessage message,
+                                                  WireStream* origin_stream) {
 
-absl::Status PingActionHandler(const std::shared_ptr<Action>& action) {
+  std::vector<std::string> error_messages;
+
+  for (auto& node_fragment : message.node_fragments) {
+    std::string node_id = node_fragment.id;
+    if (absl::Status status =
+            DispatchNodeFragmentInternal(std::move(node_fragment));
+        !status.ok()) {
+      error_messages.push_back(
+          absl::StrCat("node fragment ", node_id, ": ", status));
+    }
+  }
+
+  for (auto& action_message : message.actions) {
+    std::string action_name = action_message.name;
+    if (absl::Status status = DispatchActionMessageInternal(
+            std::move(action_message), origin_stream);
+        !status.ok()) {
+      error_messages.push_back(
+          absl::StrCat("action ", action_name, ": ", status));
+    }
+  }
+
+  if (!error_messages.empty()) {
+    return absl::InvalidArgumentError(absl::StrJoin(error_messages, "\n"));
+  }
   return absl::OkStatus();
 }
 

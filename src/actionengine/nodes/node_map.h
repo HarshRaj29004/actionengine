@@ -65,6 +65,13 @@ class NodeMap {
   NodeMap(NodeMap&& other) noexcept;
   NodeMap& operator=(NodeMap&& other) noexcept;
 
+  void FlushAllWriters() {
+    act::MutexLock lock(&mu_);
+    for (auto& [_, node] : nodes_) {
+      node->GetWriter().WaitForBufferToDrain();
+    }
+  }
+
   AsyncNode* absl_nonnull Get(
       std::string_view id, const ChunkStoreFactory& chunk_store_factory = {});
   std::shared_ptr<AsyncNode> Borrow(

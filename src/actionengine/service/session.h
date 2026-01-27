@@ -92,91 +92,159 @@ struct StreamDispatchTask {
  *
  * @headerfile actionengine/service/session.h
  */
+bool IsReservedActionName(std::string_view name);
+
+class Session;
+
+/**
+ * A function type that handles a connection between a stream and a session.
+ *
+ * Most use cases will use the default handler, `DefaultStreamHandler`, which
+ * simply receives messages from the stream and dispatches them to the session,
+ * putting NodeFragments into the attached NodeMap and executing Actions
+ * resolved from the ActionRegistry according to the ActionMessages
+ * received from the stream.
+ *
+ * However, this type can be used to define custom connection handlers
+ * that can implement different logic for handling the connection, such as
+ * handling multiple streams in a single session, or implementing
+ * custom logic for handling ActionMessages and NodeFragments. It is allowed
+ * and safe to use multiple handlers for different connections in a single
+ * application.
+ */
+using StreamHandler = std::function<absl::Status(
+    const std::shared_ptr<WireStream>& stream, Session* absl_nonnull session,
+    absl::Duration recv_timeout)>;
+
+namespace internal {
+
+StreamHandler EnsureHalfClosesOrAbortsStream(StreamHandler handler);
+
+absl::Status DefaultStreamHandler(
+    std::shared_ptr<WireStream> stream, Session* absl_nonnull session,
+    absl::Duration recv_timeout = absl::InfiniteDuration());
+
+class ConnectionCtx {
+ public:
+  ConnectionCtx(Session* absl_nonnull session,
+                std::shared_ptr<WireStream> stream, StreamHandler handler,
+                absl::Duration recv_timeout);
+
+  ~ConnectionCtx();
+
+  /**
+   * Cancel the connection handler fiber.
+   *
+   * Only cancels the handler fiber, does not release any resources,
+   * does not communicate with the stream in any way, and does not
+   * set a cancelled status.
+   */
+  void CancelHandler() const;
+
+  /**
+   * Join the connection handler fiber, release resources, including
+   * the shared reference to the wire stream.
+   *
+   * Returns the status of the connection handler.
+   */
+  absl::Status Join();
+
+  std::unique_ptr<thread::Fiber> ExtractHandlerFiber();
+
+ private:
+  Session* absl_nonnull session_;
+  std::shared_ptr<WireStream> stream_;
+  std::unique_ptr<thread::Fiber> fiber_;
+  std::shared_ptr<absl::Status> status_;
+};
+
+}  // namespace internal
+
 class Session {
  public:
-  /**
-   * Constructs a Session with the given NodeMap and optional ActionRegistry.
-   *
-   * @param node_map
-   *   The NodeMap to use for this session. Must not be null.
-   * @param action_registry
-   *   The ActionRegistry to use for this session. If null, no actions will be
-   *   available in this session, only data exchange.
-   * @param chunk_store_factory
-   *   The factory to use for creating chunk stores. Defaults to an empty
-   *   factory, which means that the choice is delegated to the NodeMap.
-   */
-  explicit Session(NodeMap* absl_nonnull node_map,
-                   ActionRegistry* absl_nullable action_registry = nullptr,
-                   ChunkStoreFactory chunk_store_factory = {});
+  Session() = default;
   ~Session();
 
   // This class is not copyable or movable.
   Session(const Session& other) = delete;
   Session& operator=(const Session& other) = delete;
 
-  [[nodiscard]] AsyncNode* absl_nonnull GetNode(
-      std::string_view id,
-      const ChunkStoreFactory& chunk_store_factory = {}) const;
+  /**
+   * Start a stream handler for the given stream.
+   *
+   * The session will share ownership of the stream and will start
+   * an exclusively owned fiber to handle the stream using the provided handler.
+   */
+  void StartStreamHandler(
+      std::string_view id, std::shared_ptr<WireStream> stream,
+      StreamHandler handler = internal::DefaultStreamHandler,
+      absl::Duration recv_timeout = absl::InfiniteDuration());
 
-  [[nodiscard]] std::shared_ptr<AsyncNode> absl_nonnull BorrowNode(
-      std::string_view id,
-      const ChunkStoreFactory& chunk_store_factory = {}) const;
+  /**
+   * Returns the context of the given connection, without cancelling or
+   * joining the fiber. After the call, the session will not own the
+   * connection, and the caller is responsible for managing the connection's
+   * lifecycle.
+   *
+   * @param id The id of the connection.
+   * @return The context of the given connection, or nullptr.
+   */
+  std::unique_ptr<internal::ConnectionCtx> ExtractStreamHandler(
+      std::string_view id);
 
-  void DispatchFrom(const std::shared_ptr<WireStream>& stream,
-                    absl::AnyInvocable<void()> on_done = {});
-  absl::Status DispatchMessage(WireMessage message,
-                               WireStream* absl_nullable stream = nullptr);
+  absl::flat_hash_map<std::string, std::unique_ptr<internal::ConnectionCtx>>
+  ExtractAllStreamHandlers();
 
-  std::vector<std::shared_ptr<Action>> ListRunningActions() const {
-    return action_context_->ListRunningActions();
-  }
+  absl::Status DispatchNodeFragment(NodeFragment node_fragment);
 
-  absl::Status CancelAction(std::string_view action_id) const {
-    return action_context_->CancelAction(action_id);
-  }
+  absl::Status DispatchActionMessage(
+      ActionMessage action_message,
+      WireStream* absl_nullable origin_stream = nullptr);
 
-  void StopDispatchingFrom(WireStream* absl_nonnull stream);
-  void StopDispatchingFromAll();
+  absl::Status DispatchWireMessage(
+      WireMessage message, WireStream* absl_nullable origin_stream = nullptr);
 
-  [[nodiscard]] absl::Duration recv_timeout() const { return recv_timeout_; }
+  void CancelAllActions() { action_context_.CancelContext(); }
 
-  [[nodiscard]] NodeMap* absl_nullable node_map() const { return node_map_; }
+  size_t GetNumActiveConnections() const;
 
-  [[nodiscard]] ActionRegistry* absl_nullable action_registry() const {
-    return action_registry_;
-  }
+  AsyncNode* absl_nullable GetNode(std::string_view id,
+                                   const ChunkStoreFactory& factory = {}) const;
 
-  void set_action_registry(ActionRegistry* absl_nullable action_registry) {
-    act::MutexLock lock(&mu_);
-    action_registry_ = action_registry;
-  }
+  NodeMap* absl_nullable node_map() const;
+  void set_node_map(NodeMap* absl_nullable node_map);
+
+  ActionRegistry* absl_nullable action_registry();
+  void set_action_registry(std::optional<ActionRegistry> action_registry);
 
  private:
-  void JoinDispatchers(bool cancel = false) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  mutable act::Mutex mu_;
 
-  act::Mutex mu_;
-  bool joined_ ABSL_GUARDED_BY(mu_) = false;
-  absl::flat_hash_map<WireStream*, std::unique_ptr<thread::Fiber>>
-      dispatch_tasks_ ABSL_GUARDED_BY(mu_){};
-  const absl::Duration recv_timeout_ = absl::Seconds(3600000);
+  absl::Status DispatchNodeFragmentInternal(NodeFragment node_fragment) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
-  NodeMap* absl_nonnull const node_map_;
-  ActionRegistry* absl_nullable action_registry_ = nullptr;
-  ActionRegistry system_action_registry_;
-  ChunkStoreFactory chunk_store_factory_;
+  absl::Status DispatchReservedActionInternal(
+      ActionMessage action_message,
+      WireStream* absl_nullable origin_stream = nullptr)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
-  std::unique_ptr<ActionContext> action_context_ = nullptr;
+  absl::Status DispatchActionMessageInternal(
+      ActionMessage action_message,
+      WireStream* absl_nullable origin_stream = nullptr)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+
+  absl::Status DispatchWireMessageInternal(
+      WireMessage message, WireStream* absl_nullable origin_stream = nullptr)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+
+  absl::flat_hash_map<std::string, std::unique_ptr<internal::ConnectionCtx>>
+      connections_ ABSL_GUARDED_BY(mu_);
+
+  std::optional<ActionRegistry> action_registry_ ABSL_GUARDED_BY(mu_);
+  NodeMap* absl_nullable node_map_ ABSL_GUARDED_BY(mu_) = nullptr;
+
+  ActionContext action_context_;
 };
-
-const ActionSchema& GetListRunningActionsSchema();
-absl::Status ListRunningActionsHandler(const std::shared_ptr<Action>& action);
-
-const ActionSchema& GetCancelActionSchema();
-absl::Status CancelActionHandler(const std::shared_ptr<Action>& action);
-
-const ActionSchema& GetPingActionSchema();
-absl::Status PingActionHandler(const std::shared_ptr<Action>& action);
 
 }  // namespace act
 

@@ -37,34 +37,8 @@
 
 namespace act {
 
-absl::Status RunSimpleSession(std::shared_ptr<WireStream> stream,
-                              Session* absl_nonnull session) {
-  const auto owned_stream = std::move(stream);
-  absl::Status status;
-  while (!thread::Cancelled()) {
-    absl::StatusOr<std::optional<WireMessage>> message =
-        owned_stream->Receive(session->recv_timeout());
-    if (!message.ok()) {
-      status = message.status();
-      owned_stream->Abort(status);
-      break;
-    }
-    if (!message->has_value()) {
-      break;
-    }
-    status = session->DispatchMessage(std::move(message)->value(),
-                                      owned_stream.get());
-  }
-
-  if (thread::Cancelled()) {
-    status = absl::CancelledError("Service is shutting down.");
-  }
-
-  return status;
-}
-
 Service::Service(ActionRegistry* absl_nullable action_registry,
-                 ConnectionHandler connection_handler,
+                 StreamHandler connection_handler,
                  ChunkStoreFactory chunk_store_factory)
     : action_registry_(
           action_registry == nullptr
@@ -74,15 +48,46 @@ Service::Service(ActionRegistry* absl_nullable action_registry,
       chunk_store_factory_(std::move(chunk_store_factory)) {}
 
 Service::~Service() {
-  JoinConnectionsAndCleanUp(/*cancel=*/true);
+  act::MutexLock lock(&mu_);
+  allow_new_connections_ = false;
+
+  for (auto& [_, session] : sessions_) {
+    session->CancelAllActions();
+  }
+  sessions_.clear();
+
+  const std::vector<std::unique_ptr<thread::Fiber>> fibers =
+      GatherConnectionFibers();
+  for (const auto& fiber : fibers) {
+    fiber->Cancel();
+  }
+
+  bool abort_streams = false;
+  const absl::Time deadline = absl::Now() + absl::Seconds(10);
+  for (const auto& fiber : fibers) {
+    thread::SelectUntil(deadline, {fiber->OnJoinable()});
+    if (absl::Now() > deadline) {
+      abort_streams = true;
+      break;
+    }
+  }
+
+  if (abort_streams) {
+    LOG(INFO) << "Aborting streams after 10 seconds of waiting for cancelled "
+                 "connections to finish.";
+    for (auto& [_, stream] : streams_) {
+      stream->Abort(absl::DeadlineExceededError("Service shutting down."));
+    }
+  }
 }
 
 WireStream* absl_nullable Service::GetStream(std::string_view stream_id) const {
   act::MutexLock lock(&mu_);
-  if (connections_.contains(stream_id)) {
-    return connections_.at(stream_id)->stream.get();
+  const auto it = streams_.find(stream_id);
+  if (it == streams_.end()) {
+    return nullptr;
   }
-  return nullptr;
+  return it->second.get();
 }
 
 Session* absl_nullable Service::GetSession(std::string_view session_id) const {
@@ -103,9 +108,8 @@ std::vector<std::string> Service::GetSessionKeys() const {
   return keys;
 }
 
-absl::StatusOr<std::shared_ptr<StreamToSessionConnection>>
-Service::EstablishConnection(std::shared_ptr<WireStream>&& stream,
-                             ConnectionHandler connection_handler) {
+absl::Status Service::StartStreamHandler(std::shared_ptr<WireStream> stream,
+                                         StreamHandler connection_handler) {
   act::MutexLock lock(&mu_);
 
   if (stream == nullptr) {
@@ -122,41 +126,31 @@ Service::EstablishConnection(std::shared_ptr<WireStream>&& stream,
     return absl::InvalidArgumentError("Provided stream has no session id.");
   }
 
-  if (cleanup_started_) {
+  if (!allow_new_connections_) {
     return absl::FailedPreconditionError(
-        "Service is shutting down, cannot establish new connections.");
+        "Service does not allow new connections.");
   }
 
-  streams_.emplace(stream_id, std::move(stream));
-
-  if (connections_.contains(stream_id)) {
+  if (streams_.contains(stream_id)) {
     return absl::AlreadyExistsError(
         absl::StrCat("Stream ", stream_id, " is already connected."));
   }
 
+  WireStream* absl_nonnull stream_ptr = stream.get();
+  streams_.emplace(stream_id, std::move(stream));
+
   if (!sessions_.contains(session_id)) {
-    node_maps_.emplace(session_id, std::make_unique<NodeMap>());
-    sessions_.emplace(session_id,
-                      std::make_unique<Session>(
-                          /*node_map=*/node_maps_.at(session_id).get(),
-                          /*action_registry=*/
-                          action_registry_.get(),
-                          /*chunk_store_factory=*/
-                          chunk_store_factory_));
+    node_maps_.emplace(session_id,
+                       std::make_unique<NodeMap>(chunk_store_factory_));
+    auto session = std::make_unique<Session>();
+    session->set_node_map(node_maps_.at(session_id).get());
+    session->set_action_registry(*action_registry_);
+    sessions_.emplace(session_id, std::move(session));
   }
 
-  streams_per_session_[session_id].insert(stream_id);
+  stream_to_session_[stream_id] = session_id;
 
-  auto connection =
-      std::make_shared<StreamToSessionConnection>(StreamToSessionConnection{
-          .stream = streams_.at(stream_id),
-          .session = sessions_.at(session_id).get(),
-          .session_id = session_id,
-          .stream_id = stream_id,
-      });
-  connections_[stream_id] = connection;
-
-  ConnectionHandler resolved_handler = std::move(connection_handler);
+  StreamHandler resolved_handler = std::move(connection_handler);
   if (resolved_handler == nullptr) {
     resolved_handler = connection_handler_;
   }
@@ -165,55 +159,17 @@ Service::EstablishConnection(std::shared_ptr<WireStream>&& stream,
         << "no connection handler provided, and no default handler is set.";
     ABSL_ASSUME(false);
   }
+  resolved_handler = EnsureCleanupOnDone(std::move(resolved_handler));
 
   // for later: Stubby streams require Accept() to be called before returning
   // from StartSession. This might not be the ideal solution with other streams.
-  if (absl::Status status = connection->stream->Accept(); !status.ok()) {
-    CleanupConnection(*connection);
-    return status;
-  }
+  RETURN_IF_ERROR(stream_ptr->Accept());
 
-  connection_fibers_[stream_id] = thread::NewTree(
-      thread::TreeOptions(),
-      [this, resolved_handler = std::move(resolved_handler), connection]() {
-        connection->status =
-            resolved_handler(connection->stream, connection->session);
-        act::MutexLock cleanup_lock(&mu_);
-        CleanupConnection(*connection);
-      });
+  sessions_.at(session_id)
+      ->StartStreamHandler(stream_id, streams_.at(stream_id),
+                           std::move(resolved_handler));
 
-  return connection;
-}
-
-absl::Status Service::JoinConnection(
-    StreamToSessionConnection* absl_nonnull connection) {
-  std::unique_ptr<thread::Fiber> fiber(nullptr);
-
-  // Extract connection and fiber from the map, so we can join them outside
-  // the lock with a guarantee that they are not modified while we are trying.
-  {
-    act::MutexLock lock(&mu_);
-    if (const auto node = connections_.extract(connection->stream_id);
-        !node.empty()) {
-      std::shared_ptr<StreamToSessionConnection> service_owned_connection =
-          std::move(node.mapped());
-    }
-
-    if (const auto node = connection_fibers_.extract(connection->stream_id);
-        !node.empty()) {
-      fiber = std::move(node.mapped());
-    }
-  }
-
-  if (fiber == nullptr) {
-    // Only possible if the connection was already joined.
-    // TODO (hpnkv): actually, also if the connection was never
-    //   established by this service. For now, it is considered a user error,
-    //   therefore Service does not keep track of it.
-    return connection->status;
-  }
-  fiber->Join();
-  return connection->status;
+  return absl::OkStatus();
 }
 
 void Service::SetActionRegistry(const ActionRegistry& action_registry) const {
@@ -221,94 +177,35 @@ void Service::SetActionRegistry(const ActionRegistry& action_registry) const {
   *action_registry_ = action_registry;
 }
 
-void Service::JoinConnectionsAndCleanUp(bool cancel) {
-  act::MutexLock lock(&mu_);
-  if (cleanup_started_) {
-    mu_.unlock();
-    thread::Select({cleanup_done_.OnEvent()});
-    mu_.lock();
-    return;
-  }
+StreamHandler Service::EnsureCleanupOnDone(StreamHandler handler) {
+  return [this, handler = std::move(handler)](
+             std::shared_ptr<WireStream> stream, Session* absl_nonnull session,
+             absl::Duration recv_timeout) {
+    auto status = internal::EnsureHalfClosesOrAbortsStream(handler)(
+        stream, session, recv_timeout);
 
-  cleanup_started_ = true;
+    act::MutexLock lock(&mu_);
+    const std::string stream_id = stream->GetId();
 
-  absl::flat_hash_map<std::string, std::unique_ptr<thread::Fiber>> fibers =
-      std::move(connection_fibers_);
-  connection_fibers_.clear();
-
-  absl::flat_hash_map<std::string, std::shared_ptr<StreamToSessionConnection>>
-      connections = std::move(connections_);
-  connections_.clear();
-
-  if (cancel) {
-    for (const auto& [_, fiber] : fibers) {
-      if (fiber != nullptr) {
-        fiber->Cancel();
-      }
+    const std::unique_ptr<internal::ConnectionCtx> ctx =
+        session->ExtractStreamHandler(stream_id);
+    std::unique_ptr<thread::Fiber> handler_fiber = ctx->ExtractHandlerFiber();
+    if (handler_fiber != nullptr) {
+      // handler_fiber should just be the current fiber
+      DCHECK(handler_fiber.get() == thread::Fiber::Current());
+      thread::Detach(std::move(handler_fiber));
     }
-    for (const auto& [_, connection] : connections) {
-      if (connection != nullptr) {
-        connection->stream->Abort(absl::CancelledError(
-            "Service is shutting down, aborting connection."));
-      }
+
+    if (session->GetNumActiveConnections() == 0) {
+      sessions_.erase(stream_to_session_.at(stream_id));
+      node_maps_.erase(stream_to_session_.at(stream_id));
     }
-  }
 
-  DLOG(INFO) << "Cleaning up connections.";
-  for (const auto& [_, fiber] : fibers) {
-    if (fiber != nullptr) {
-      mu_.unlock();
-      fiber->Join();
-      mu_.lock();
-    }
-  }
-  cleanup_done_.Notify();
-  DLOG(INFO) << "Connections cleaned up.";
-}
+    stream_to_session_.erase(stream_id);
+    streams_.erase(stream_id);
 
-void Service::CleanupConnection(const StreamToSessionConnection& connection) {
-  connections_.erase(connection.stream_id);
-
-  std::shared_ptr<WireStream> extracted_stream = nullptr;
-  std::unique_ptr<NodeMap> extracted_node_map = nullptr;
-  std::unique_ptr<Session> extracted_session = nullptr;
-
-  if (const auto map_node = streams_.extract(connection.stream_id);
-      !map_node.empty()) {
-    extracted_stream = std::move(map_node.mapped());
-  }
-
-  streams_per_session_.at(connection.session_id).erase(connection.stream_id);
-  if (streams_per_session_.at(connection.session_id).empty()) {
-    if (const auto map_node = sessions_.extract(connection.session_id);
-        !map_node.empty()) {
-      extracted_session = std::move(map_node.mapped());
-    }
-    if (const auto map_node = node_maps_.extract(connection.stream_id);
-        !map_node.empty()) {
-      extracted_node_map = std::move(map_node.mapped());
-    }
-    streams_per_session_.erase(connection.session_id);
-  }
-
-  if (extracted_session != nullptr) {
-    extracted_session.reset();
-    DLOG(INFO) << "session " << connection.session_id
-               << " has no more stable connections, deleted.";
-  }
-
-  if (connection.status.ok()) {
-    extracted_stream->HalfClose();
-  } else {
-    extracted_stream->Abort(connection.status);
-  }
-  extracted_stream.reset();
-
-  extracted_node_map.reset();
-  auto fiber = connection_fibers_.extract(connection.stream_id);
-  if (!fiber.empty() && fiber.mapped() != nullptr) {
-    thread::Detach(std::move(fiber.mapped()));
-  }
+    return status;
+  };
 }
 
 }  // namespace act

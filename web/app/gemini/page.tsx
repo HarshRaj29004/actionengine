@@ -150,14 +150,12 @@ export default function Page() {
 
     setMessages((prev) => [...prev, msg])
 
-    const sessionTokenNode = action.getInput('session_token')
-    await sessionTokenNode.putAndFinalize(makeTextChunk(sessionToken || ''))
+    await action
+      .getInput('session_token')
+      .putAndFinalize(makeTextChunk(sessionToken || ''))
 
-    const chatInputNode = action.getInput('chat_input')
-    await chatInputNode.putAndFinalize(makeTextChunk(msg.text))
-
-    const apiKeyNode = action.getInput('api_key')
-    await apiKeyNode.putAndFinalize(makeTextChunk(apiKey))
+    await action.getInput('chat_input').putAndFinalize(makeTextChunk(msg.text))
+    await action.getInput('api_key').putAndFinalize(makeTextChunk(apiKey))
 
     setChatMessagesFromAsyncNode(action.getOutput('output'), setMessages).then()
     setChatMessagesFromAsyncNode(
@@ -172,10 +170,8 @@ export default function Page() {
 
   return (
     <div className='flex h-screen w-full flex-row space-x-4'>
-      <div className='w-[360px] h-full bg-gray-50'>
-        <div className='w-full h-1/3'>
-          <Leva oneLineLabels flat fill titleBar={{ drag: false }} />
-        </div>
+      <div className='w-[360px] h-full bg-zinc-600'>
+        <Leva oneLineLabels fill titleBar={{ drag: false }} />
       </div>
       <div className='flex flex-1 flex-row space-x-4'>
         <div className='flex flex-col w-full items-center justify-center space-y-4 py-4'>

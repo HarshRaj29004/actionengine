@@ -115,4 +115,5 @@ SCHEMA = actionengine.ActionSchema(
         ("actions", DeepResearchAction),
         ("user_log", "text/plain"),
     ],
+    description="""Conduct deep research on a given topic by creating a plan, investigating each item, and synthesizing findings""",
 )

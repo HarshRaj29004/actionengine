@@ -37,13 +37,13 @@
 namespace act::net {
 WebsocketWireStream::WebsocketWireStream(
     std::unique_ptr<BoostWebsocketStream> stream, std::string_view id)
-    : stream_({std::move(stream)}),
+    : stream_(std::make_unique<FiberAwareWebsocketStream>(std::move(stream))),
       id_(id.empty() ? GenerateUUID4() : std::string(id)) {
   DLOG(INFO) << absl::StrFormat("WESt %s created", id_);
 }
 
-WebsocketWireStream::WebsocketWireStream(FiberAwareWebsocketStream stream,
-                                         std::string_view id)
+WebsocketWireStream::WebsocketWireStream(
+    std::unique_ptr<FiberAwareWebsocketStream> stream, std::string_view id)
     : stream_(std::move(stream)),
       id_(id.empty() ? GenerateUUID4() : std::string(id)) {}
 
@@ -64,6 +64,7 @@ absl::Status WebsocketWireStream::Send(WireMessage message) {
 
 WebsocketWireStream::~WebsocketWireStream() {
   act::MutexLock lock(&mu_);
+  LOG(INFO) << absl::StrFormat("WESt %p destruction started", this);
   if (!half_closed_) {
     if (!closed_) {
       LOG(ERROR)
@@ -86,25 +87,34 @@ absl::StatusOr<std::optional<WireMessage>> WebsocketWireStream::Receive(
         "WebsocketWireStream is closed, cannot receive messages");
   }
 
-  std::vector<uint8_t> buffer;
+  std::optional<std::vector<uint8_t>> buffer;
 
   // Receive from underlying websocket stream.
   mu_.unlock();
-  absl::Status status = stream_.Read(timeout, &buffer);
+  absl::Status status = stream_->Read(timeout, &buffer);
   mu_.lock();
   if (!status.ok()) {
     return status;
   }
 
+  if (!buffer) {
+    closed_ = true;
+    return std::nullopt;
+  }
+
   // Unpack the received data into a WireMessage.
   mu_.unlock();
-  absl::StatusOr<WireMessage> unpacked = cppack::Unpack<WireMessage>(buffer);
+  absl::StatusOr<WireMessage> unpacked = cppack::Unpack<WireMessage>(*buffer);
   mu_.lock();
   if (!unpacked.ok()) {
     return unpacked.status();
   }
+  LOG(INFO) << absl::StrFormat("WESt %p Receive(): %v", this, *unpacked);
 
   if (unpacked->actions.empty() && unpacked->node_fragments.empty()) {
+    if (half_closed_) {
+      RETURN_IF_ERROR(stream_->Close());
+    }
     return std::nullopt;
   }
 
@@ -113,7 +123,9 @@ absl::StatusOr<std::optional<WireMessage>> WebsocketWireStream::Receive(
       closed_ = true;
       if (!std::holds_alternative<Chunk>(fragment.data)) {
         status_ = absl::InternalError(
-            "Received abort fragment with invalid data type. Aborting anyway.");
+            "Received an abort fragment with invalid data type. Aborting "
+            "anyway.");
+        RETURN_IF_ERROR(stream_->Close(status_));
         return status_;
       }
       absl::StatusOr<absl::Status> abort_status_or =
@@ -123,6 +135,7 @@ absl::StatusOr<std::optional<WireMessage>> WebsocketWireStream::Receive(
       } else {
         status_ = *abort_status_or;
       }
+      RETURN_IF_ERROR(stream_->Close(status_));
       return status_;
     }
   }
@@ -131,13 +144,12 @@ absl::StatusOr<std::optional<WireMessage>> WebsocketWireStream::Receive(
 }
 
 absl::Status WebsocketWireStream::Start() {
-  // In this case, the client EG stream is not responsible for handshaking.
-  return absl::OkStatus();
+  return stream_->Start();
 }
 
 absl::Status WebsocketWireStream::Accept() {
   DLOG(INFO) << absl::StrFormat("WESt %s Accept()", id_);
-  return stream_.Accept();
+  return stream_->Accept();
 }
 
 void WebsocketWireStream::HalfClose() {
@@ -156,6 +168,11 @@ void WebsocketWireStream::AbortInternal(absl::Status status)
     return;
   }
 
+  if (!stream_->GetStream().is_open()) {
+    closed_ = true;
+    return;
+  }
+
   SendInternal(WireMessage{.node_fragments = {{
                                .id = "__abort__",
                                .data = ConvertTo<Chunk>(status).value(),
@@ -164,16 +181,20 @@ void WebsocketWireStream::AbortInternal(absl::Status status)
                            }}})
       .IgnoreError();
 
-  stream_.CancelRead();
+  stream_->Close(status).IgnoreError();
   closed_ = true;
   half_closed_ = true;
-  status_ = absl::CancelledError("WebsocketWireStream aborted");
+  status_ = std::move(status);
 }
 
 absl::Status WebsocketWireStream::SendInternal(WireMessage message) {
+  LOG(INFO) << absl::StrFormat("WESt %p SendInternal(): %v", this, message);
   mu_.unlock();
-  auto status = stream_.Write(cppack::Pack(std::move(message)));
+  auto status = stream_->Write(cppack::Pack(std::move(message)));
   mu_.lock();
+
+  LOG(INFO) << absl::StrFormat("WESt %p SendInternal() status %v", this,
+                               status);
 
   return status;
 }
@@ -182,9 +203,10 @@ absl::Status WebsocketWireStream::HalfCloseInternal() {
   if (half_closed_) {
     return absl::OkStatus();
   }
-
-  half_closed_ = true;
   RETURN_IF_ERROR(SendInternal(WireMessage{}));
+  half_closed_ = true;
+
+  // stream_->HalfClose();
 
   return absl::OkStatus();
 }

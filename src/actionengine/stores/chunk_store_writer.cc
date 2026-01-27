@@ -31,6 +31,7 @@
 #include "actionengine/data/types.h"
 #include "actionengine/net/stream.h"
 #include "actionengine/stores/chunk_store.h"
+#include "actionengine/util/metrics.h"
 
 namespace act {
 

@@ -64,6 +64,9 @@ SignallingClient::SignallingClient(std::string_view address, uint16_t port,
 SignallingClient::~SignallingClient() {
   act::MutexLock lock(&mu_);
   CancelInternal();
+  on_offer_ = nullptr;
+  on_candidate_ = nullptr;
+  on_answer_ = nullptr;
   JoinInternal();
 }
 
@@ -111,7 +114,7 @@ absl::Status SignallingClient::ConnectWithIdentity(
           },
           use_ssl_));
 
-  loop_status_ = stream_.Start();
+  loop_status_ = stream_->Start();
   if (!loop_status_.ok()) {
     return loop_status_;
   }
@@ -125,22 +128,36 @@ absl::Status SignallingClient::ConnectWithIdentity(
 }
 
 void SignallingClient::RunLoop() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
-  std::string message;
+  std::optional<std::string> message;
   absl::Status status;
 
   while (!thread::Cancelled()) {
-    message.clear();
+    message = std::nullopt;
 
     mu_.unlock();
-    status = stream_.ReadText(absl::InfiniteDuration(), &message);
+    status = stream_->ReadText(absl::InfiniteDuration(), &message);
     mu_.lock();
+    if (thread::Cancelled()) {
+      status = absl::CancelledError("SignallingClient cancelled");
+      break;
+    }
 
     if (!status.ok()) {
       break;
     }
 
+    if (!message) {
+      if (absl::IsCancelled(status)) {
+        // Use the status from the read if it was already cancelled
+      } else {
+        status =
+            absl::ResourceExhaustedError("Underlying WS stream was closed.");
+      }
+      break;
+    }
+
     boost::system::error_code error;
-    boost::json::value parsed_message = boost::json::parse(message, error);
+    boost::json::value parsed_message = boost::json::parse(*message, error);
     if (error) {
       LOG(ERROR) << "WebsocketActionEngineServer parse() failed: "
                  << error.message();
@@ -151,7 +168,7 @@ void SignallingClient::RunLoop() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     if (const auto id_ptr = parsed_message.find_pointer("/id", error);
         id_ptr == nullptr || error) {
       LOG(ERROR) << "WebsocketActionEngineServer no 'id' field in message: "
-                 << message;
+                 << *message;
       continue;
     } else {
       client_id = id_ptr->as_string().c_str();
@@ -161,7 +178,7 @@ void SignallingClient::RunLoop() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     if (const auto type_ptr = parsed_message.find_pointer("/type", error);
         type_ptr == nullptr || error) {
       LOG(ERROR) << "WebsocketActionEngineServer no 'type' field in message: "
-                 << message;
+                 << *message;
       continue;
     } else {
       type = type_ptr->as_string().c_str();
@@ -169,7 +186,7 @@ void SignallingClient::RunLoop() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
 
     if (type != "offer" && type != "candidate" && type != "answer") {
       LOG(ERROR) << "WebsocketActionEngineServer unknown message type: " << type
-                 << " in message: " << message;
+                 << " in message: " << *message;
       continue;
     }
 
@@ -197,6 +214,9 @@ void SignallingClient::RunLoop() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
 
   loop_status_ = status;
   if (!loop_status_.ok()) {
+    on_answer_ = nullptr;
+    on_candidate_ = nullptr;
+    on_offer_ = nullptr;
     error_event_.Notify();
   }
 }

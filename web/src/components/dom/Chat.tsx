@@ -2,6 +2,8 @@ import { JSX, useEffect, useRef, useState } from 'react'
 import { marked } from 'marked'
 import { v4 as uuidv4 } from 'uuid'
 
+import styles from './Chat.module.css'
+
 export interface ChatMessage {
   id: string
   text: string
@@ -25,7 +27,10 @@ export function Chat(props: ChatProps) {
 
   const messagesEndRef = useRef(null)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    messagesEndRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    })
   }, [messages])
 
   const className = props.className || 'h-full max-w-full w-full'
@@ -74,9 +79,7 @@ export function Chat(props: ChatProps) {
                     ) : (
                       <div
                         dangerouslySetInnerHTML={markedText}
-                        className='max-w-full'
-                        css='pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-                        a {white-space: pre-wrap; overflow-wrap: anywhere; }'
+                        className={`max-w-full ${styles.message}`}
                       />
                     )}
                   </div>

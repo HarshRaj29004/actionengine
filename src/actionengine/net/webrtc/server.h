@@ -164,7 +164,8 @@ class WebRtcServer {
 
   std::shared_ptr<SignallingClient> InitSignallingClient(
       std::string_view signalling_address, uint16_t signalling_port,
-      bool use_ssl, DataChannelConnectionMap* absl_nonnull connections);
+      bool use_ssl,
+      const std::shared_ptr<DataChannelConnectionMap>& connections);
 
   act::Service* absl_nonnull const service_;
 

@@ -39,67 +39,6 @@
 namespace act {
 
 /**
- * A connection between a stream and a session.
- *
- * This struct is used to represent a connection between a stream and a session.
- * It contains the stream, session, and their IDs, as well as the status of the
- * connection.
- *
- * @collaborationgraph
- *
- * @headerfile actionengine/service/service.h
- */
-struct StreamToSessionConnection {
-  std::shared_ptr<WireStream> stream = nullptr;
-  Session* absl_nullable session = nullptr;
-
-  std::string session_id;  // dead sessions may lose their id.
-  std::string stream_id;   // dead streams may lose their id.
-
-  absl::Status status;
-};
-
-/**
- * A function type that handles a connection between a stream and a session.
- *
- * Most use cases will use the default handler, `RunSimpleSession`, which
- * simply receives messages from the stream and dispatches them to the session,
- * putting NodeFragments into the attached NodeMap and executing Actions
- * resolved from the ActionRegistry according to the ActionMessages
- * received from the stream.
- *
- * However, this type can be used to define custom connection handlers
- * that can implement different logic for handling the connection, such as
- * handling multiple streams in a single session, or implementing
- * custom logic for handling ActionMessages and NodeFragments. It is allowed
- * and safe to use multiple handlers for different connections in a single
- * application.
- */
-using ConnectionHandler = std::function<absl::Status(
-    const std::shared_ptr<WireStream>&, Session* absl_nonnull)>;
-
-/**
- * Runs the default session handler for a stream.
- *
- * The default handler simply receives messages from the stream and dispatches
- * them to the session. NodeFragments are sent to the attached NodeMap, and
- * ActionMessages are materialized into Actions resolved from the
- * ActionRegistry and executed in the context of the session, the NodeMap, and
- * the WireStream that are attached to the session.
- *
- * @callgraph
- *
- * @param stream
- *   The stream to run the session on. This stream must be a valid WireStream
- *   instance that is already connected and ready to send and receive messages.
- * @param session
- *   The session to run the stream on. It is normally created by a Service,
- *   but can also be created manually.
- */
-absl::Status RunSimpleSession(std::shared_ptr<WireStream> stream,
-                              Session* absl_nonnull session);
-
-/**
  * The ActionEngine service class. Manages sessions, streams, and connections.
  *
  * This class provides methods to establish and join connections, as well as
@@ -126,9 +65,10 @@ absl::Status RunSimpleSession(std::shared_ptr<WireStream> stream,
  */
 class Service : public std::enable_shared_from_this<Service> {
  public:
-  explicit Service(ActionRegistry* absl_nullable action_registry = nullptr,
-                   ConnectionHandler connection_handler = RunSimpleSession,
-                   ChunkStoreFactory chunk_store_factory = {});
+  explicit Service(
+      ActionRegistry* absl_nullable action_registry = nullptr,
+      StreamHandler connection_handler = internal::DefaultStreamHandler,
+      ChunkStoreFactory chunk_store_factory = {});
 
   ~Service();
 
@@ -178,32 +118,8 @@ class Service : public std::enable_shared_from_this<Service> {
    *   A StreamToSessionConnection object representing the established
    *   connection, or an error status if the connection could not be established.
    */
-  auto EstablishConnection(std::shared_ptr<WireStream>&& stream,
-                           ConnectionHandler connection_handler = nullptr)
-      -> absl::StatusOr<std::shared_ptr<StreamToSessionConnection>>;
-  /**
-   * Joins an existing connection to the service.
-   *
-   * This method is used to join a connection that has already been established
-   * and is being managed by the service. It will move the connection out of the
-   * service, so it is no longer responsible for managing it.
-   *
-   * It is unsafe to pass a connection that has not been established by the same
-   * service, as it will not be able to join it properly and may return
-   * an error, as well as block indefinitely or even crash the application.
-   *
-   * @param connection
-   *   The connection to join. The connection must be a valid
-   *   StreamToSessionConnection object that has been established with the service.
-   * @return
-   *   An absl::Status indicating the success or failure of the operation.
-   * @note
-   *   This method will, by intention, block. Therefore, you should call it
-   *   only when you are sure that the connection is ready to be joined, i.e.
-   *   will not proceed indefinitely.
-   */
-  auto JoinConnection(StreamToSessionConnection* absl_nonnull connection)
-      -> absl::Status;
+  absl::Status StartStreamHandler(std::shared_ptr<WireStream> stream,
+                                  StreamHandler connection_handler = {});
 
   /**
    * Sets the action registry for the service.
@@ -226,34 +142,43 @@ class Service : public std::enable_shared_from_this<Service> {
    */
   auto SetActionRegistry(const ActionRegistry& action_registry) const -> void;
 
-  void JoinConnectionsAndCleanUp(bool cancel = false) ABSL_LOCKS_EXCLUDED(mu_);
+  void DisallowNewConnections() {
+    act::MutexLock lock(&mu_);
+    allow_new_connections_ = false;
+  }
 
  private:
-  void CleanupConnection(const StreamToSessionConnection& connection)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  StreamHandler EnsureCleanupOnDone(StreamHandler handler);
+
+  std::vector<std::unique_ptr<thread::Fiber>> GatherConnectionFibers()
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+    std::vector<std::unique_ptr<thread::Fiber>> fibers;
+    fibers.reserve(streams_.size());
+    for (auto& [session_id, session] : sessions_) {
+      absl::flat_hash_map<std::string, std::unique_ptr<internal::ConnectionCtx>>
+          ctxs = session->ExtractAllStreamHandlers();
+      for (auto& [stream_id, ctx] : ctxs) {
+        fibers.push_back(ctx->ExtractHandlerFiber());
+      }
+    }
+    return fibers;
+  }
 
   std::unique_ptr<ActionRegistry> action_registry_;
-  ConnectionHandler connection_handler_;
+  StreamHandler connection_handler_;
   ChunkStoreFactory chunk_store_factory_;
 
   mutable act::Mutex mu_;
   absl::flat_hash_map<std::string, std::shared_ptr<WireStream>> streams_
       ABSL_GUARDED_BY(mu_);
-  // for now, we only support one-to-one session-stream mapping, therefore we
-  // use the stream id as the session id.
   absl::flat_hash_map<std::string, std::unique_ptr<NodeMap>> node_maps_
       ABSL_GUARDED_BY(mu_);
   absl::flat_hash_map<std::string, std::unique_ptr<Session>> sessions_
       ABSL_GUARDED_BY(mu_);
-  absl::flat_hash_map<std::string, std::shared_ptr<StreamToSessionConnection>>
-      connections_ ABSL_GUARDED_BY(mu_);
-  absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
-      streams_per_session_ ABSL_GUARDED_BY(mu_);
-  absl::flat_hash_map<std::string, std::unique_ptr<thread::Fiber>>
-      connection_fibers_ ABSL_GUARDED_BY(mu_);
+  absl::flat_hash_map<std::string, std::string> stream_to_session_
+      ABSL_GUARDED_BY(mu_);
 
-  bool cleanup_started_ ABSL_GUARDED_BY(mu_) = false;
-  thread::PermanentEvent cleanup_done_;
+  bool allow_new_connections_ ABSL_GUARDED_BY(mu_) = true;
 };
 
 }  // namespace act

@@ -155,41 +155,39 @@ class FiberAwareWebsocketStream {
  public:
   explicit FiberAwareWebsocketStream(
       std::unique_ptr<BoostWebsocketStream> stream = nullptr,
-      PerformHandshakeFn handshake_fn = {}) noexcept;
+      PerformHandshakeFn handshake_fn = {});
 
+  // not copyable or moveable
   FiberAwareWebsocketStream(const FiberAwareWebsocketStream&) = delete;
   FiberAwareWebsocketStream& operator=(const FiberAwareWebsocketStream&) =
       delete;
 
-  FiberAwareWebsocketStream(FiberAwareWebsocketStream&&) noexcept;
-  FiberAwareWebsocketStream& operator=(FiberAwareWebsocketStream&&) noexcept;
-
   ~FiberAwareWebsocketStream();
 
   template <typename ExecutionContext>
-  static absl::StatusOr<FiberAwareWebsocketStream> Connect(
+  static absl::StatusOr<std::unique_ptr<FiberAwareWebsocketStream>> Connect(
       ExecutionContext& context, std::string_view address, uint16_t port,
       std::string_view target = "/",
       PrepareStreamFn prepare_stream_fn = PrepareClientStream,
       bool use_ssl = false);
 
-  static absl::StatusOr<FiberAwareWebsocketStream> Connect(
+  static absl::StatusOr<std::unique_ptr<FiberAwareWebsocketStream>> Connect(
       std::string_view address, uint16_t port, std::string_view target = "/",
       PrepareStreamFn prepare_stream_fn = PrepareClientStream,
       bool use_ssl = false);
 
   BoostWebsocketStream& GetStream() const;
 
-  absl::Status Accept() const noexcept;
-  absl::Status Close() const noexcept;
+  absl::Status Accept();
+  absl::Status Close(absl::Status status = absl::OkStatus());
   absl::Status Read(absl::Duration timeout,
-                    std::vector<uint8_t>* absl_nonnull buffer,
-                    bool* absl_nullable got_text = nullptr) noexcept;
+                    std::optional<std::vector<uint8_t>>* absl_nonnull buffer,
+                    bool* absl_nullable got_text = nullptr);
   absl::Status ReadText(absl::Duration timeout,
-                        std::string* absl_nonnull buffer) noexcept;
-  absl::Status Start() const noexcept;
-  absl::Status Write(const std::vector<uint8_t>& message_bytes) noexcept;
-  absl::Status WriteText(const std::string& message) noexcept;
+                        std::optional<std::string>* absl_nonnull buffer);
+  absl::Status Start();
+  absl::Status Write(const std::vector<uint8_t>& message_bytes) const;
+  absl::Status WriteText(const std::string& message) const;
 
   void CancelRead() noexcept {
     act::MutexLock lock(&mu_);
@@ -206,7 +204,10 @@ class FiberAwareWebsocketStream {
   }
 
  private:
-  absl::Status CloseInternal() const noexcept
+  absl::Status WriteBytesInternal(const std::vector<uint8_t>& message_bytes,
+                                  bool text = false) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  absl::Status CloseInternal(absl::Status status = absl::OkStatus())
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
   std::unique_ptr<BoostWebsocketStream> stream_;
@@ -216,8 +217,8 @@ class FiberAwareWebsocketStream {
 
   mutable act::Mutex mu_;
   mutable act::CondVar cv_ ABSL_GUARDED_BY(mu_);
-  bool write_pending_ ABSL_GUARDED_BY(mu_) = false;
-  bool read_pending_ ABSL_GUARDED_BY(mu_) = false;
+  mutable bool write_pending_ ABSL_GUARDED_BY(mu_) = false;
+  mutable bool read_pending_ ABSL_GUARDED_BY(mu_) = false;
   boost::asio::cancellation_signal cancel_signal_ ABSL_GUARDED_BY(mu_);
 };
 
@@ -259,9 +260,12 @@ absl::Status DoHandshake(BoostWebsocketStream* absl_nonnull stream,
                          std::string_view host, std::string_view target = "/");
 
 template <typename ExecutionContext>
-absl::StatusOr<FiberAwareWebsocketStream> FiberAwareWebsocketStream::Connect(
-    ExecutionContext& context, std::string_view address, uint16_t port,
-    std::string_view target, PrepareStreamFn prepare_stream_fn, bool use_ssl) {
+absl::StatusOr<std::unique_ptr<FiberAwareWebsocketStream>>
+FiberAwareWebsocketStream::Connect(ExecutionContext& context,
+                                   std::string_view address, uint16_t port,
+                                   std::string_view target,
+                                   PrepareStreamFn prepare_stream_fn,
+                                   bool use_ssl) {
   std::unique_ptr<BoostWebsocketStream> ws_stream;
   std::shared_ptr<boost::asio::ssl::context> ssl_ctx;
 
@@ -348,9 +352,9 @@ absl::StatusOr<FiberAwareWebsocketStream> FiberAwareWebsocketStream::Connect(
     return DoHandshake(stream, host, target);
   };
 
-  FiberAwareWebsocketStream fa_stream(std::move(ws_stream),
-                                      std::move(do_handshake));
-  fa_stream.ssl_ctx_ = std::move(ssl_ctx);
+  auto fa_stream = std::make_unique<FiberAwareWebsocketStream>(
+      std::move(ws_stream), std::move(do_handshake));
+  fa_stream->ssl_ctx_ = std::move(ssl_ctx);
 
   return std::move(fa_stream);
 }

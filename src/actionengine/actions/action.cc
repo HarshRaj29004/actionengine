@@ -36,6 +36,7 @@
 #include "actionengine/service/session.h"
 #include "actionengine/stores/chunk_store_reader.h"
 #include "actionengine/stores/chunk_store_writer.h"
+#include "actionengine/util/metrics.h"
 #include "actionengine/util/random.h"
 #include "actionengine/util/status_macros.h"
 
@@ -63,14 +64,22 @@ Action::Action(ActionSchema schema, std::string_view id,
   for (auto& [output_name, output_id] : std::move(output_parameters)) {
     output_name_to_id_[std::move(output_name)] = std::move(output_id);
   }
+
+  MetricStore& pmetrics = GetGlobalMetricStore();
+  pmetrics.IncrementCounter("counter_action_instances_created", 1)
+      .IgnoreError();
+  pmetrics.AddToIntegerGauge("gauge_action_instances", 1).IgnoreError();
 }
 
 Action::~Action() {
   act::MutexLock lock(&mu_);
+  MetricStore& pmetrics = GetGlobalMetricStore();
 
   reffed_readers_.clear();
 
   if (has_been_run_ && !run_status_.has_value()) {
+    auto waiting_in_dtor_gauge =
+        pmetrics.MakeScopedIntegerGauge("gauge_actions_waiting_in_dtor");
     CancelInternal();
     const absl::Time deadline = absl::Now() + absl::Seconds(10);
     while (!run_status_.has_value()) {
@@ -83,6 +92,8 @@ Action::~Action() {
       }
     }
   }
+
+  pmetrics.AddToIntegerGauge("gauge_action_instances", -1).IgnoreError();
 }
 
 std::string Action::MakeNodeId(std::string_view action_id,
@@ -219,10 +230,15 @@ void Action::BindRegistry(ActionRegistry* registry) {
 }
 
 absl::Status Action::Await(absl::Duration timeout) {
+  MetricStore& pmetrics = GetGlobalMetricStore();
+  auto awaited_gauge = pmetrics.MakeScopedIntegerGauge("gauge_actions_awaited");
+
   const absl::Time started_at = absl::Now();
 
   act::MutexLock lock(&mu_);
   if (has_been_run_) {
+    auto awaited_run_gauge =
+        pmetrics.MakeScopedIntegerGauge("gauge_run_actions_awaited");
     while (!run_status_) {
       if (cv_.WaitWithDeadline(&mu_, started_at + timeout) && !run_status_) {
         return absl::DeadlineExceededError(
@@ -234,6 +250,8 @@ absl::Status Action::Await(absl::Duration timeout) {
   }
 
   if (has_been_called_) {
+    auto awaited_call_gauge =
+        pmetrics.MakeScopedIntegerGauge("gauge_called_actions_awaited");
     AsyncNode* status_node =
         GetOutputInternal("__status__", /*bind_stream=*/false);
 
@@ -259,6 +277,7 @@ absl::Status Action::Await(absl::Duration timeout) {
 absl::Status Action::Call(
     absl::flat_hash_map<std::string, std::string> wire_message_headers) {
   act::MutexLock lock(&mu_);
+
   bind_streams_on_inputs_default_ = true;
   bind_streams_on_outputs_default_ = false;
   has_been_called_ = true;
@@ -292,6 +311,8 @@ absl::StatusOr<absl::Status> Action::CallAndWaitForDispatchStatus(
 
 absl::Status Action::Run() {
   act::MutexLock lock(&mu_);
+  MetricStore& pmetrics = GetGlobalMetricStore();
+
   bind_streams_on_inputs_default_ = false;
   bind_streams_on_outputs_default_ = true;
 
@@ -303,6 +324,7 @@ absl::Status Action::Run() {
   }
 
   has_been_run_ = true;
+  auto run_gauge = pmetrics.MakeScopedIntegerGauge("gauge_actions_running");
 
   mu_.unlock();
   absl::Status handler_status = handler_(shared_from_this());
@@ -313,6 +335,8 @@ absl::Status Action::Run() {
 
   // Propagate error statuses to all output nodes.
   if (!handler_status.ok()) {
+    pmetrics.IncrementCounter("counter_action_errors", 1).IgnoreError();
+
     for (const auto& [output_name, output_node] : borrowed_outputs_) {
       if (output_name == "__status__" || output_name == "__dispatch_status__") {
         continue;
@@ -407,6 +431,9 @@ void Action::CancelInternal() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
 
 bool Action::Cancelled() const {
   act::MutexLock lock(&mu_);
+  MetricStore& pmetrics = GetGlobalMetricStore();
+  pmetrics.IncrementCounter("counter_actions_cancelled", 1).IgnoreError();
+
   return cancelled_->HasBeenNotified();
 }
 

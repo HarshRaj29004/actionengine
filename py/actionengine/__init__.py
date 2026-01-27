@@ -56,8 +56,6 @@ Session = eg_session.Session
 WireMessage = data.WireMessage
 WireStream = eg_stream.WireStream
 
-StreamToSessionConnection = eg_service.StreamToSessionConnection
-
 is_null_chunk = utils.is_null_chunk
 wrap_pybind_object = utils.wrap_pybind_object
 

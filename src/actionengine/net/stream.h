@@ -216,7 +216,9 @@ class WireStream {
    * @return
    *   A pointer to the underlying implementation of the stream.
    */
-  [[nodiscard]] virtual auto GetImpl() const -> const void* { return nullptr; }
+  [[nodiscard]] virtual auto GetImpl() const -> const void* absl_nullable {
+    return nullptr;
+  }
 
   /**
    * Returns the underlying implementation of the stream.
@@ -229,7 +231,7 @@ class WireStream {
    * @return A pointer to the underlying implementation of type \p T.
    */
   template <typename T>
-  [[nodiscard]] auto GetImpl() const -> T* {
+  [[nodiscard]] auto GetImpl() const -> T* absl_nullable {
     return static_cast<T*>(GetImpl());
   }
 };

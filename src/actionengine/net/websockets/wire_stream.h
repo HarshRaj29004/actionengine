@@ -55,8 +55,9 @@ class WebsocketWireStream final : public WireStream {
   explicit WebsocketWireStream(std::unique_ptr<BoostWebsocketStream> stream,
                                std::string_view id = "");
 
-  explicit WebsocketWireStream(FiberAwareWebsocketStream stream,
-                               std::string_view id = "");
+  explicit WebsocketWireStream(
+      std::unique_ptr<FiberAwareWebsocketStream> stream,
+      std::string_view id = "");
 
   ~WebsocketWireStream() override;
 
@@ -97,7 +98,7 @@ class WebsocketWireStream final : public WireStream {
 
   mutable act::Mutex mu_;
 
-  FiberAwareWebsocketStream stream_;
+  std::unique_ptr<FiberAwareWebsocketStream> stream_;
   bool half_closed_ ABSL_GUARDED_BY(mu_) = false;
   bool closed_ ABSL_GUARDED_BY(mu_) = false;
   std::string id_;

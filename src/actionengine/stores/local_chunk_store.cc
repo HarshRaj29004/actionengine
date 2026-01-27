@@ -28,6 +28,7 @@
 #include "actionengine/concurrency/concurrency.h"
 #include "actionengine/data/types.h"
 #include "actionengine/util/map_util.h"
+#include "actionengine/util/metrics.h"
 
 namespace act {
 
@@ -40,6 +41,16 @@ LocalChunkStore::LocalChunkStore(std::string_view id) : LocalChunkStore() {
 LocalChunkStore::~LocalChunkStore() {
   act::MutexLock lock(&mu_);
   ClosePutsAndAwaitPendingOperations();
+
+  uint64_t total_data_bytes_remaining = 0;
+  for (const auto& [_, chunk] : chunks_) {
+    total_data_bytes_remaining += chunk.data.size() + chunk.ref.size();
+  }
+  MetricStore& pmetrics = GetGlobalMetricStore();
+  pmetrics
+      .AddToIntegerGauge("gauge_local_chunk_store_data_bytes",
+                         -static_cast<int64_t>(total_data_bytes_remaining))
+      .IgnoreError();
 }
 
 void LocalChunkStore::Notify() {
@@ -173,10 +184,19 @@ LocalChunkStore::GetRefByArrivalOrder(int64_t arrival_offset,
 
 absl::StatusOr<std::optional<Chunk>> LocalChunkStore::Pop(int64_t seq) {
   act::MutexLock lock(&mu_);
+  MetricStore& pmetrics = GetGlobalMetricStore();
+
   if (const auto map_node = chunks_.extract(seq); map_node) {
     const int64_t arrival_order = seq_to_arrival_order_[seq];
     seq_to_arrival_order_.erase(seq);
     arrival_order_to_seq_.erase(arrival_order);
+
+    pmetrics
+        .AddToIntegerGauge("gauge_local_chunk_store_data_bytes",
+                           -static_cast<int64_t>(map_node.mapped().data.size() +
+                                                 map_node.mapped().ref.size()))
+        .IgnoreError();
+
     return std::move(map_node.mapped());
   }
 
@@ -198,6 +218,13 @@ absl::Status LocalChunkStore::Put(int64_t seq, Chunk chunk, bool final) {
   seq_to_arrival_order_[seq] = total_chunks_put_;
   chunks_[seq] = std::move(chunk);
   ++total_chunks_put_;
+
+  MetricStore& pmetrics = GetGlobalMetricStore();
+  pmetrics
+      .AddToIntegerGauge("gauge_local_chunk_store_data_bytes",
+                         static_cast<int64_t>(chunks_.at(seq).data.size() +
+                                              chunks_.at(seq).ref.size()))
+      .IgnoreError();
 
   cv_.SignalAll();
   return absl::OkStatus();

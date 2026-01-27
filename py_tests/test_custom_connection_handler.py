@@ -7,11 +7,15 @@ import pytest
 async def handle_connection(
     stream: actionengine._C.websockets.WebsocketWireStream,
     _: actionengine.Session,
+    recv_timeout: float = -1.0,
 ):
-    received = await asyncio.to_thread(stream.receive)
+    received = await asyncio.to_thread(stream.receive, recv_timeout)
     received.node_fragments[0].chunk.data = "Hello from custom handler"
 
     await asyncio.to_thread(stream.send, received)
+
+    received = await asyncio.to_thread(stream.receive, recv_timeout)
+    assert received is None
     await asyncio.to_thread(stream.half_close)
 
 

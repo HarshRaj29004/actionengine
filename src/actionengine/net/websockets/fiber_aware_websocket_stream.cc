@@ -222,70 +222,8 @@ WsUrl WsUrl::FromStringOrDie(std::string_view url_str) {
 
 FiberAwareWebsocketStream::FiberAwareWebsocketStream(
     std::unique_ptr<BoostWebsocketStream> stream,
-    PerformHandshakeFn handshake_fn) noexcept
+    PerformHandshakeFn handshake_fn)
     : stream_(std::move(stream)), handshake_fn_(std::move(handshake_fn)) {}
-
-FiberAwareWebsocketStream::FiberAwareWebsocketStream(
-    FiberAwareWebsocketStream&& other) noexcept {
-  act::MutexLock lock(&other.mu_);
-
-  bool debug_warning_logged = false;
-  while (other.write_pending_ || other.read_pending_) {
-    other.cv_.WaitWithTimeout(&other.mu_, kDebugWarningTimeout);
-    if (!debug_warning_logged) {
-      LOG(WARNING) << "FiberAwareWebsocketStream move constructor waiting for "
-                      "pending operations to finish. You should not move a "
-                      "stream while it has pending operations.";
-      debug_warning_logged = true;
-    }
-  }
-  stream_ = std::move(other.stream_);
-  ssl_ctx_ = std::move(other.ssl_ctx_);
-  handshake_fn_ = std::move(other.handshake_fn_);
-}
-
-FiberAwareWebsocketStream& FiberAwareWebsocketStream::operator=(
-    FiberAwareWebsocketStream&& other) noexcept {
-  if (this == &other) {
-    return *this;  // Handle self-assignment
-  }
-
-  concurrency::TwoMutexLock lock(&mu_, &other.mu_);
-
-  bool other_debug_warning_logged = false;
-  while (other.write_pending_ || other.read_pending_) {
-    other.cv_.WaitWithTimeout(&other.mu_, kDebugWarningTimeout);
-    if (!other_debug_warning_logged) {
-      LOG(WARNING)
-          << "FiberAwareWebsocketStream move assignment waiting for "
-             "pending operations to finish. You should not move from a "
-             "stream while it has pending operations.";
-      other_debug_warning_logged = true;
-    }
-  }
-
-  CloseInternal().IgnoreError();
-
-  bool debug_warning_logged = false;
-  while (write_pending_ || read_pending_) {
-    cv_.WaitWithTimeout(&mu_, kDebugWarningTimeout);
-    if (!debug_warning_logged) {
-      LOG(WARNING)
-          << "FiberAwareWebsocketStream move assignment waiting for "
-             "pending operations to finish. You should not move into a "
-             "stream while it has pending operations.";
-      debug_warning_logged = true;
-    }
-  }
-
-  stream_ = std::move(other.stream_);
-  ssl_ctx_ = std::move(other.ssl_ctx_);
-  handshake_fn_ = std::move(other.handshake_fn_);
-  other.stream_ = nullptr;  // Ensure the moved-from object is empty
-  other.ssl_ctx_ = nullptr;
-
-  return *this;
-}
 
 FiberAwareWebsocketStream::~FiberAwareWebsocketStream() {
   act::MutexLock lock(&mu_);
@@ -311,9 +249,11 @@ FiberAwareWebsocketStream::~FiberAwareWebsocketStream() {
       .IgnoreError();  // Close the stream gracefully, ignoring errors
 }
 
-absl::StatusOr<FiberAwareWebsocketStream> FiberAwareWebsocketStream::Connect(
-    std::string_view address, uint16_t port, std::string_view target,
-    PrepareStreamFn prepare_stream_fn, bool use_ssl) {
+absl::StatusOr<std::unique_ptr<FiberAwareWebsocketStream>>
+FiberAwareWebsocketStream::Connect(std::string_view address, uint16_t port,
+                                   std::string_view target,
+                                   PrepareStreamFn prepare_stream_fn,
+                                   bool use_ssl) {
   return Connect(*util::GetDefaultAsioExecutionContext(), address, port, target,
                  std::move(prepare_stream_fn), use_ssl);
 }
@@ -323,9 +263,25 @@ BoostWebsocketStream& FiberAwareWebsocketStream::GetStream() const {
 }
 
 absl::Status FiberAwareWebsocketStream::Write(
-    const std::vector<uint8_t>& message_bytes) noexcept {
+    const std::vector<uint8_t>& message_bytes) const {
   act::MutexLock lock(&mu_);
+  return WriteBytesInternal(message_bytes, /*text=*/false);
+}
 
+absl::Status FiberAwareWebsocketStream::WriteText(
+    const std::string& message) const {
+  act::MutexLock lock(&mu_);
+  const std::vector<uint8_t> message_bytes(message.begin(), message.end());
+  return WriteBytesInternal(message_bytes, /*text=*/true);
+}
+
+absl::Status FiberAwareWebsocketStream::Close(absl::Status status) {
+  act::MutexLock lock(&mu_);
+  return CloseInternal(std::move(status));
+}
+
+absl::Status FiberAwareWebsocketStream::WriteBytesInternal(
+    const std::vector<uint8_t>& message_bytes, bool text) const {
   while (write_pending_) {
     cv_.Wait(&mu_);
   }
@@ -333,11 +289,14 @@ absl::Status FiberAwareWebsocketStream::Write(
     return absl::FailedPreconditionError(
         "Websocket stream is not open for writing");
   }
-
   write_pending_ = true;
 
   auto write_done = std::make_shared<AsioDone>();
-  stream_->binary(true);
+  if (!text) {
+    stream_->binary(true);
+  } else {
+    stream_->text(true);
+  }
   stream_->async_write(
       boost::asio::buffer(message_bytes),
       [write_done](const boost::system::error_code& ec, std::size_t) {
@@ -348,95 +307,31 @@ absl::Status FiberAwareWebsocketStream::Write(
   mu_.unlock();
   thread::Select({write_done->event.OnEvent()});
   mu_.lock();
-
-  boost::system::error_code error = write_done->error;
   write_pending_ = false;
   cv_.SignalAll();
 
   if (thread::Cancelled()) {
     if (stream_->is_open()) {
       stream_->next_layer().shutdown(boost::asio::socket_base::shutdown_send,
-                                     error);
+                                     write_done->error);
     }
 
     return absl::CancelledError("WsWrite cancelled");
   }
 
-  if (error == boost::beast::websocket::error::closed ||
-      error == boost::system::errc::operation_canceled) {
-    return absl::CancelledError("WsWrite cancelled");
-  }
-
-  if (error) {
-    LOG(ERROR) << absl::StrFormat("Cannot write to websocket stream: %v",
-                                  error.message());
-    return absl::InternalError(error.message());
-  }
-
-  return absl::OkStatus();
-}
-
-// TODO: This is absolutely the same as the previous Write method,
-//       consider refactoring to avoid code duplication.
-absl::Status FiberAwareWebsocketStream::WriteText(
-    const std::string& message) noexcept {
-  act::MutexLock lock(&mu_);
-
-  while (write_pending_) {
-    cv_.Wait(&mu_);
-  }
-  if (!stream_->is_open()) {
-    return absl::FailedPreconditionError(absl::StrFormat(
-        "Websocket stream is not open for writing. Message: %s", message));
-  }
-
-  write_pending_ = true;
-
-  auto write_done = std::make_shared<AsioDone>();
-  stream_->text(true);
-  stream_->async_write(
-      boost::asio::buffer(message),
-      [write_done](const boost::system::error_code& ec, std::size_t) {
-        write_done->error = ec;
-        write_done->event.Notify();
-      });
-
-  mu_.unlock();
-  thread::Select({write_done->event.OnEvent()});
-  mu_.lock();
-
-  boost::system::error_code error = write_done->error;
-  write_pending_ = false;
-  cv_.SignalAll();
-
-  if (thread::Cancelled()) {
-    if (stream_->is_open()) {
-      stream_->next_layer().shutdown(boost::asio::socket_base::shutdown_send,
-                                     error);
+  if (write_done->error) {
+    if (write_done->error == boost::system::errc::operation_canceled) {
+      return absl::CancelledError("WsWrite cancelled");
     }
-    return absl::CancelledError("WsWrite cancelled");
-  }
-
-  if (error == boost::beast::websocket::error::closed ||
-      error == boost::system::errc::operation_canceled) {
-    return absl::CancelledError("WsWrite cancelled");
-  }
-
-  if (error) {
     LOG(ERROR) << absl::StrFormat("Cannot write to websocket stream: %v",
-                                  error.message());
-    return absl::InternalError(error.message());
+                                  write_done->error.message());
+    return absl::InternalError(write_done->error.message());
   }
 
   return absl::OkStatus();
 }
 
-absl::Status FiberAwareWebsocketStream::Close() const noexcept {
-  act::MutexLock lock(&mu_);
-  return CloseInternal();
-}
-
-absl::Status FiberAwareWebsocketStream::CloseInternal() const noexcept
+absl::Status FiberAwareWebsocketStream::CloseInternal(absl::Status status)
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
   // TODO(hpnkv): Find out how to cancel Read to be able to close the stream
   //   w/ a graceful WebSocket close code.
@@ -449,10 +344,21 @@ absl::Status FiberAwareWebsocketStream::CloseInternal() const noexcept
   if (!stream_->is_open()) {
     return absl::OkStatus();
   }
+  while (write_pending_) {
+    cv_.Wait(&mu_);
+  }
+
+  cancel_signal_.emit(boost::asio::cancellation_type::total);
+  // while (read_pending_) {
+  //   cv_.Wait(&mu_);
+  // }
+
+  write_pending_ = true;
 
   auto close_done = std::make_shared<AsioDone>();
   stream_->async_close(
-      boost::beast::websocket::close_code::normal,
+      status.ok() ? boost::beast::websocket::close_code::normal
+                  : boost::beast::websocket::close_code::internal_error,
       [close_done](const boost::system::error_code& async_error) {
         close_done->error = async_error;
         close_done->event.Notify();
@@ -461,6 +367,8 @@ absl::Status FiberAwareWebsocketStream::CloseInternal() const noexcept
   mu_.unlock();
   thread::Select({close_done->event.OnEvent()});
   mu_.lock();
+  write_pending_ = false;
+  cv_.SignalAll();
 
   if (close_done->error) {
     LOG(ERROR) << absl::StrFormat("Cannot close websocket stream: %v",
@@ -491,9 +399,8 @@ absl::Status DoHandshake(BoostWebsocketStream* stream, std::string_view host,
   return absl::OkStatus();
 }
 
-absl::Status FiberAwareWebsocketStream::Accept() const noexcept {
+absl::Status FiberAwareWebsocketStream::Accept() {
   act::MutexLock lock(&mu_);
-
   stream_->set_option(boost::beast::websocket::stream_base::decorator(
       [](boost::beast::websocket::response_type& res) {
         res.set(boost::beast::http::field::server,
@@ -543,8 +450,9 @@ absl::Status FiberAwareWebsocketStream::Accept() const noexcept {
 }
 
 absl::Status FiberAwareWebsocketStream::Read(
-    absl::Duration timeout, std::vector<uint8_t>* absl_nonnull buffer,
-    bool* absl_nullable got_text) noexcept {
+    absl::Duration timeout,
+    std::optional<std::vector<uint8_t>>* absl_nonnull buffer,
+    bool* absl_nullable got_text) {
   const absl::Time deadline = absl::Now() + timeout;
 
   act::MutexLock lock(&mu_);
@@ -618,13 +526,14 @@ absl::Status FiberAwareWebsocketStream::Read(
   }
 
   if (error == boost::beast::websocket::error::closed ||
-      error == boost::system::errc::operation_canceled) {
+      error == boost::system::errc::operation_canceled ||
+      error == boost::asio::error::eof) {
     return absl::CancelledError("WsRead cancelled");
   }
 
   if (error) {
-    LOG(ERROR) << absl::StrFormat("Cannot read from websocket stream: %v",
-                                  error.message());
+    DLOG(ERROR) << absl::StrFormat("Cannot read from websocket stream: %v",
+                                   error.message());
     return absl::InternalError(error.message());
   }
 
@@ -632,12 +541,16 @@ absl::Status FiberAwareWebsocketStream::Read(
 }
 
 absl::Status FiberAwareWebsocketStream::ReadText(
-    absl::Duration timeout, std::string* absl_nonnull buffer) noexcept {
+    absl::Duration timeout, std::optional<std::string>* absl_nonnull buffer) {
   bool got_text = false;
-  std::vector<uint8_t> temp_buffer;
+  std::optional<std::vector<uint8_t>> temp_buffer;
 
   RETURN_IF_ERROR(
       Read(timeout, &temp_buffer, &got_text));  // Reuse the Read method.
+
+  if (!temp_buffer) {
+    *buffer = std::nullopt;
+  }
 
   if (!got_text) {
     return absl::FailedPreconditionError(
@@ -645,13 +558,14 @@ absl::Status FiberAwareWebsocketStream::ReadText(
   }
 
   // Convert the received bytes to a string.
-  *buffer = std::string(std::make_move_iterator(temp_buffer.begin()),
-                        std::make_move_iterator(temp_buffer.end()));
+  *buffer = std::string(std::make_move_iterator(temp_buffer->begin()),
+                        std::make_move_iterator(temp_buffer->end()));
 
   return absl::OkStatus();
 }
 
-absl::Status FiberAwareWebsocketStream::Start() const noexcept {
+absl::Status FiberAwareWebsocketStream::Start() {
+  act::MutexLock lock(&mu_);
   if (handshake_fn_) {
     return handshake_fn_(stream_.get());
   }

@@ -25,7 +25,7 @@ export default function Page() {
           <GenmediaExample />
         </View>
       </div>
-      <div className='flex w-[360px] h-full bg-zinc-100'>
+      <div className='flex w-[360px] h-full bg-zinc-600'>
         <div className='w-full h-1/3'>
           <Leva oneLineLabels flat fill titleBar={{ drag: false }} />
         </div>

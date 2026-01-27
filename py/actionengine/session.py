@@ -52,19 +52,19 @@ class Session(_C.service.Session):
             super().get_node_map(),
         )
 
-    async def dispatch_message(
+    async def dispatch_wire_message(
         self,
         message: data.WireMessage,
         stream: _C.service.WireStream,
     ):
         """Dispatches a message to the session."""
         return await asyncio.to_thread(
-            super().dispatch_message, message, stream
+            super().dispatch_wire_message, message, stream
         )
 
-    def dispatch_from(self, stream: _C.service.WireStream, on_done=do_nothing):
+    def dispatch_from(self, stream: _C.service.WireStream):
         """Dispatches messages from the stream to the session."""
-        super().dispatch_from(stream, on_done)
+        super().dispatch_from(stream)
         self._streams.add(stream)
 
     def stop_dispatching_from(self, stream: _C.service.WireStream):

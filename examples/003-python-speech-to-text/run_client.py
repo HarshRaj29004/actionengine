@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import uuid
 
 import actionengine
 from RealtimeSTT import AudioToTextRecorder
@@ -7,6 +8,9 @@ from RealtimeSTT import AudioToTextRecorder
 from stt.actions import has_stop_command
 from stt.actions import make_action_registry
 from stt.serialisation import register_stt_serialisers
+
+
+SIGNALLING_URL = "wss://actionengine.dev:19001"
 
 
 def setup_action_engine():
@@ -23,10 +27,13 @@ async def main(args: argparse.Namespace):
 
     action_registry = make_action_registry()
     node_map = actionengine.NodeMap()
-    target = "/"
-    print(f"Connecting to ws://{args.host}:{args.port}{target}.")
-    stream = actionengine.websockets.make_websocket_stream(
-        args.host, target, args.port
+
+    client_identity = str(uuid.uuid4())
+    stream = await asyncio.to_thread(
+        actionengine.webrtc.make_webrtc_stream,
+        client_identity,
+        args.server_webrtc_identity,
+        SIGNALLING_URL,
     )
 
     print("Connected, starting session.")
@@ -64,9 +71,9 @@ async def main(args: argparse.Namespace):
         await shutdown
         await action["speech"].finalize()
         await action.wait_until_complete()
+        await asyncio.to_thread(stream.half_close)
 
         print("Finalised the speech stream.")
-        session.stop_dispatching_from(stream)
 
 
 if __name__ == "__main__":
@@ -83,6 +90,12 @@ if __name__ == "__main__":
         type=int,
         default=20000,
         help="The port to connect to.",
+    )
+    parser.add_argument(
+        "--server_webrtc_identity",
+        type=str,
+        required=True,
+        help="The WebRTC signalling identity to connect to.",
     )
 
     asyncio.run(main(parser.parse_args()))

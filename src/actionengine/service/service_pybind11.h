@@ -46,8 +46,6 @@ namespace py = ::pybind11;
 void BindStream(py::handle scope, std::string_view name = "WireStream");
 void BindSession(py::handle scope, std::string_view name = "Session");
 void BindService(py::handle scope, std::string_view name = "Service");
-void BindStreamToSessionConnection(
-    py::handle scope, std::string_view name = "StreamToSessionConnection");
 
 /**
  * A Python subclass of `WireStream` that allows for custom implementations of

@@ -450,6 +450,8 @@ const openSignaling = async (url: string, connection: RTCPeerConnection) => {
     rejectOpen = reject;
   });
 
+  let remoteSdpSet = false;
+
   ws.onopen = () => {
     console.log('WebSocket opened');
     resolveOpen(ws);
@@ -479,6 +481,12 @@ const openSignaling = async (url: string, connection: RTCPeerConnection) => {
     }
 
     if (message.type === 'candidate') {
+      if (!remoteSdpSet) {
+        console.warn(
+          'Received ICE candidate before remote SDP is set, ignoring',
+        );
+        return;
+      }
       if (
         connection.iceConnectionState === 'connected' ||
         connection.iceConnectionState === 'completed' ||
@@ -504,6 +512,7 @@ const openSignaling = async (url: string, connection: RTCPeerConnection) => {
       sdp: message.description,
       type: message.type,
     });
+    remoteSdpSet = true;
   };
 
   return await promise;

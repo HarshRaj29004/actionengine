@@ -132,11 +132,13 @@ absl::Status Main(int argc, char** argv) {
   server.Run();
 
   act::NodeMap node_map;
-  act::Session session(&node_map, &action_registry);
+  act::Session session;
+  session.set_node_map(&node_map);
+  session.set_action_registry(action_registry);
   ASSIGN_OR_RETURN(std::shared_ptr<act::WireStream> stream,
                    act::net::MakeWebsocketWireStream("localhost", port));
 
-  session.DispatchFrom(stream);
+  session.StartStreamHandler(stream->GetId(), stream);
 
   std::cout << absl::StrFormat(
       "Bidi actions. Enter a prompt, and the server will print it back with a "

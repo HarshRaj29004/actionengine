@@ -86,7 +86,7 @@ class SignallingClient {
       const absl::flat_hash_map<std::string, std::string>& headers = {});
 
   absl::Status Send(const std::string& message) {
-    return stream_.WriteText(message);
+    return stream_->WriteText(message);
   }
 
   void Cancel() {
@@ -101,11 +101,13 @@ class SignallingClient {
 
  private:
   void CancelInternal() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
-    if (const absl::Status status = stream_.Close(); !status.ok()) {
+    if (loop_ != nullptr) {
+      loop_->Cancel();
+    }
+    if (const absl::Status status = stream_->Close(); !status.ok()) {
       LOG(ERROR) << "SignallingClient::Cancel failed: " << status;
     }
     if (loop_ != nullptr) {
-      loop_->Cancel();
       loop_status_ =
           absl::CancelledError("WebsocketActionEngineServer cancelled");
     }
@@ -138,7 +140,7 @@ class SignallingClient {
   PeerJsonHandler on_answer_;
 
   std::unique_ptr<boost::asio::thread_pool> thread_pool_;
-  FiberAwareWebsocketStream stream_;
+  std::unique_ptr<FiberAwareWebsocketStream> stream_;
   std::unique_ptr<thread::Fiber> loop_;
   absl::Status loop_status_ ABSL_GUARDED_BY(mu_);
   mutable act::Mutex mu_;
