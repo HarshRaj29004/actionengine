@@ -70,8 +70,12 @@ async def main(args: argparse.Namespace):
 
         await shutdown
         await action["speech"].finalize()
-        await action.wait_until_complete()
-        await asyncio.to_thread(stream.half_close)
+        try:
+            await action.wait_until_complete()
+        except Exception:
+            raise
+        finally:
+            await asyncio.to_thread(stream.half_close)
 
         print("Finalised the speech stream.")
 

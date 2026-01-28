@@ -254,6 +254,13 @@ auto AsyncNode::Next(std::optional<absl::Duration> timeout)
 }
 
 template <>
+inline absl::StatusOr<std::optional<absl::Status>> AsyncNode::Next(
+    std::optional<absl::Duration> timeout) {
+  ChunkStoreReader& reader = GetReader();
+  return reader.Next<absl::Status>(timeout);
+}
+
+template <>
 inline auto AsyncNode::Next<NodeFragment>(std::optional<absl::Duration> timeout)
     -> absl::StatusOr<std::optional<NodeFragment>> {
   ChunkStoreReader& reader = GetReader();
@@ -295,7 +302,7 @@ inline absl::StatusOr<absl::Status> AsyncNode::ConsumeAs<absl::Status>(
     return result;
   }
 
-  result.emplace() = *std::move(item);
+  *result = *std::move(item);
   return result;
 }
 

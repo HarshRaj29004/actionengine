@@ -321,17 +321,16 @@ ChunkStoreReader::Next<absl::Status>(std::optional<absl::Duration> timeout) {
     return std::nullopt;
   }
   if (chunk->metadata && chunk->metadata->mimetype == "__status__") {
-    absl::StatusOr<absl::Status> status = ConvertTo<absl::Status>(*chunk);
-    if (!status.ok()) {
-      return status.status();
+    absl::StatusOr<std::optional<absl::Status>> retval;
+    absl::Status next_status;
+    const absl::Status conversion_status =
+        Assign(*std::move(chunk), &next_status);
+    if (!conversion_status.ok()) {
+      retval.AssignStatus(conversion_status);
+      return retval;
     }
-    if (!status->ok()) {
-      return *status;
-    }
-
-    absl::StatusOr<absl::Status> result;
-    result.emplace() = absl::OkStatus();
-    return result;
+    retval.emplace() = std::move(next_status);
+    return retval;
   }
   return absl::InvalidArgumentError(
       "Expected a status chunk, but got a regular chunk.");

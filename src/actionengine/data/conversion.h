@@ -38,7 +38,9 @@ template <typename Dst, typename Src>
 absl::StatusOr<Dst> ConvertTo(Src&& from) {
   Dst result;
   if (auto status = Assign(std::forward<Src>(from), &result); !status.ok()) {
-    return status;
+    absl::StatusOr<Dst> retval;
+    retval.AssignStatus(status);
+    return retval;
   }
   return result;
 }
