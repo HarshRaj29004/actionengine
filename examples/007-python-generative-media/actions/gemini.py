@@ -3,15 +3,13 @@ import base64
 import os
 import random
 import traceback
-from functools import lru_cache
 
 import actionengine
 from google import genai
 from google.genai import types
-from ollama import chat, Options
+from ollama import Options, AsyncClient
 
 
-@lru_cache(maxsize=1)
 def get_gemini_client(api_key: str):
     return genai.client.AsyncClient(
         genai.client.BaseApiClient(
@@ -70,12 +68,21 @@ async def resolve_session_token_to_session_id_and_seqs(
 
 
 async def run_rehydrate_session(action: actionengine.Action):
+    print(f"Running rehydrate_session {action.get_id()}.", flush=True)
     session_token = await action["session_token"].consume()
-    session_id, next_message_seq, next_thought_seq = (
-        await resolve_session_token_to_session_id_and_seqs(session_token)
-    )
+    if session_token:
+        session_id, next_message_seq, next_thought_seq = (
+            await resolve_session_token_to_session_id_and_seqs(session_token)
+        )
+    else:
+        session_id = None
+        next_message_seq = 0
+        next_thought_seq = 0
+
     if session_id is None:
-        session_id = base64.urlsafe_b64encode(os.urandom(6)).decode("utf-8")
+        await action["previous_messages"].finalize()
+        await action["previous_thoughts"].finalize()
+        return
 
     redis_client = get_redis_client()
 
@@ -223,20 +230,28 @@ async def generate_content_gemini(
         types.Content(parts=[types.Part(text=chat_input)], role="user")
     )
 
+    system_instructions = []
+    async for instruction in action["system_instructions"]:
+        system_instructions.append(instruction)
+
     try:
         retries_left = 3
         while retries_left > 0:
             try:
+                config = types.GenerateContentConfig(
+                    thinking_config=types.ThinkingConfig(
+                        include_thoughts=True,
+                        thinking_budget=-1,
+                    ),
+                    tools=[types.Tool(google_search=types.GoogleSearch())],
+                )
+                if system_instructions:
+                    config.system_instruction = system_instructions
+
                 stream = await gemini_client.models.generate_content_stream(
                     model="gemini-2.5-flash",
                     contents=contents,
-                    config=types.GenerateContentConfig(
-                        thinking_config=types.ThinkingConfig(
-                            include_thoughts=True,
-                            thinking_budget=-1,
-                        ),
-                        tools=[types.Tool(google_search=types.GoogleSearch())],
-                    ),
+                    config=config,
                 )
 
                 output = ""
@@ -304,13 +319,19 @@ async def generate_content_ollama(action: actionengine.Action):
     )
     await rehydrate_action["session_token"].put_and_finalize(session_token)
 
+    system_instructions = []
+    async for instruction in action["system_instructions"]:
+        system_instructions.append(instruction)
+
+    joined_instruction = (
+        "\n".join(system_instructions)
+        if system_instructions
+        else "You are a helpful assistant called DeepSeek. "
+        "You are running on Helena's local server using Ollama. "
+    )
+
     messages = [
-        {
-            "role": "system",
-            "content": ""
-            "You are a helpful assistant called DeepSeek. "
-            "You are running on Helena's local server using Ollama. ",
-        },
+        {"role": "system", "content": joined_instruction},
     ]
     message_idx = 0
     async for message in rehydrate_action["previous_messages"]:
@@ -325,73 +346,60 @@ async def generate_content_ollama(action: actionengine.Action):
         thoughts.append(thought)
 
     chat_input = await action["chat_input"].consume()
-    messages.append({"role": "user", "content": chat_input})
+    messages.append(
+        {
+            "role": "user",
+            "content": f"{'\n'.join(system_instructions)}\n"
+            f"The following text is the user's input:\n\n {chat_input}",
+        }
+    )
 
-    with actionengine.buffer_wire_messages(
-        action.get_stream()
-    ) as buffer_context:
+    retries_left = 3
+    while retries_left > 0:
         try:
-            retries_left = 3
-            while retries_left > 0:
-                try:
-                    stream = chat(
-                        model="deepseek-r1:8b",
-                        messages=messages,
-                        stream=True,
-                        think=True,
-                        options=Options(seed=random.randint(0, 2**31 - 1)),
-                    )
+            ollama_client = AsyncClient()
 
-                    output = ""
-                    thought = ""
+            stream = await ollama_client.chat(
+                model="deepseek-r1:8b",
+                messages=messages,
+                stream=True,
+                think=True,
+                options=Options(seed=random.randint(0, 2**31 - 1)),
+            )
 
-                    sent_tokens = 0
-                    flush_every = 20
+            output = ""
+            thought = ""
 
-                    for chunk in stream:
-                        if "content" in chunk["message"]:
-                            await action["output"].put(
-                                chunk["message"]["content"]
-                            )
-                            output += chunk["message"]["content"]
+            async for chunk in stream:
+                if "content" in chunk["message"]:
+                    await action["output"].put(chunk["message"]["content"])
+                    output += chunk["message"]["content"]
 
-                        if "thinking" in chunk["message"]:
-                            await action["thoughts"].put(
-                                chunk["message"]["thinking"]
-                            )
-                            thought += chunk["message"]["thinking"]
-
-                        sent_tokens += 1
-                        if sent_tokens % flush_every == 0:
-                            await asyncio.to_thread(buffer_context.force_flush)
-
-                    session_token = await save_message_turn(
-                        session_id,
-                        chat_input,
-                        output,
-                        thought,
-                        next_output_seq,
-                        next_thought_seq,
-                    )
-                    await action["new_session_token"].put_and_finalize(
-                        session_token
-                    )
-                    break
-                except Exception:
-                    retries_left -= 1
-                    await action["output"].put(
-                        f"Retrying due to an internal error... {retries_left} retries left."
-                    )
-                    if retries_left == 0:
-                        await action["output"].put(
-                            "Failed to connect to Gemini API."
-                        )
-                        traceback.print_exc()
-                        return
-
-        finally:
+                if "thinking" in chunk["message"]:
+                    await action["thoughts"].put(chunk["message"]["thinking"])
+                    thought += chunk["message"]["thinking"]
             await action["output"].finalize()
             await action["thoughts"].finalize()
+
+            session_token = await save_message_turn(
+                session_id,
+                chat_input,
+                output,
+                thought,
+                next_output_seq,
+                next_thought_seq,
+            )
+            await action["new_session_token"].put_and_finalize(session_token)
+            break
+        except Exception:
+            retries_left -= 1
+            await action["output"].put(
+                f"Retrying due to an internal error... {retries_left} retries left."
+            )
+            if retries_left == 0:
+                await action["output"].put("Failed to connect to Gemini API.")
+                traceback.print_exc()
+                return
 
 
 async def generate_content(action: actionengine.Action):
@@ -432,6 +440,7 @@ GENERATE_CONTENT_SCHEMA = actionengine.ActionSchema(
     inputs=[
         ("api_key", "text/plain"),
         ("chat_input", "text/plain"),
+        ("system_instructions", "text/plain"),
         ("session_token", "text/plain"),
     ],
     outputs=[

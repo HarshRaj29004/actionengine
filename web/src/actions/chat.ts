@@ -16,7 +16,7 @@ export const GENERATE_CONTENT_SCHEMA = {
   inputs: [
     { name: 'api_key', type: 'text/plain' },
     { name: 'session_token', type: 'text/plain' },
-    { name: 'prompt', type: 'text/plain' },
+    { name: 'system_instructions', type: 'text/plain' },
     { name: 'chat_input', type: 'text/plain' },
   ],
   outputs: [

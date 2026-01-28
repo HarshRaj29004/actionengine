@@ -174,8 +174,6 @@ class Action(_C.actions.Action):
         """Adds Python-specific attributes to the action."""
         if not hasattr(self, "_schema"):
             self._schema = self.get_schema()
-        if not hasattr(self, "_task"):
-            self._task: asyncio.Task | None = None
 
     async def wait_until_complete(self):
         return await asyncio.to_thread(super().wait_until_complete)
@@ -290,20 +288,11 @@ class Action(_C.actions.Action):
             super().make_action_in_same_session(name),
         )
 
-    def _clear_exception(self, _: asyncio.Task) -> None:
-        if (
-            self._task is not None
-            and self._task.done()
-            and not self._task.cancelled()
-        ):
-            _ = self._task.exception()
-
     def run(self) -> "Action":
         """Runs the action."""
-        _C.save_first_encountered_event_loop()
+        # _C.save_first_encountered_event_loop()
         self._hint_run()
-        self._task = asyncio.create_task(asyncio.to_thread(super().run))
-        self._task.add_done_callback(self._clear_exception)
+        super().run_in_background()
         return self
 
     def bind_handler(self, handler: ActionHandler) -> None:
@@ -316,6 +305,4 @@ class Action(_C.actions.Action):
         self._node_map = node_map
 
     def __del__(self):
-        if hasattr(self, "_task") and self._task is not None:
-            if not self._task.done():
-                self._task.cancel()
+        self.cancel()

@@ -190,11 +190,15 @@ absl::StatusOr<int> ChunkStoreWriter::Put(Chunk value, int seq, bool final)
   }
 
   EnsureWriteLoop();
-  if (!buffer_.writer()->WriteUnlessCancelled(NodeFragment{
-          .data = std::move(value),
-          .seq = written_seq,
-          .continued = !final,
-      })) {
+  mu_.unlock();
+  const bool success = buffer_.writer()->WriteUnlessCancelled(NodeFragment{
+      .data = std::move(value),
+      .seq = written_seq,
+      .continued = !final,
+  });
+  mu_.lock();
+
+  if (!success) {
     accepts_puts_ = false;
     return absl::CancelledError("Cancelled.");
   }

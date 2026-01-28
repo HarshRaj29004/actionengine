@@ -330,17 +330,15 @@ Redis::~Redis() {
   }
 
   ExecuteCommandWithGuards("UNSUBSCRIBE", channels_args).IgnoreError();
+  if (connected_) {
+    mu_.unlock();
+    redisAsyncDisconnect(context_.get());
+    mu_.lock();
+  }
 
   while (num_pending_commands_ > 0 && connected_ && status_.ok()) {
     cv_.Wait(&mu_);
   }
-
-  // if (connected_) {
-  //   mu_.unlock();
-  //   redisAsyncDisconnect(context_.get());
-  //   mu_.lock();
-  //   context_.release();
-  // }
 }
 
 void Redis::SetKeyPrefix(std::string_view prefix) {

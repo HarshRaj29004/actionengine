@@ -116,7 +116,7 @@ export class Action {
   private readonly mu: Mutex;
   private readonly cv: CondVar;
 
-  private headers: Map<string, Uint8Array>;
+  private headers: Map<string, Uint8Array<ArrayBuffer>>;
 
   constructor(
     definition: ActionDefinition,
@@ -295,21 +295,25 @@ export class Action {
     });
   }
 
-  async call(headers: Map<string, Uint8Array> | null = null): Promise<void> {
+  async call(
+    headers: Map<string, Uint8Array<ArrayBuffer>> | null = null,
+  ): Promise<void> {
     this.bindStreamsOnInputsDefault = true;
     this.bindStreamsOnOutputsDefault = false;
     this.hasBeenCalled = true;
 
     if (this.stream !== null) {
+      const actionMessage = this.getActionMessage();
+      console.log(actionMessage);
       await this.stream.send({
-        actions: [this.getActionMessage()],
+        actions: [actionMessage],
         headers,
       });
     }
   }
 
   async callAndWaitForDispatchStatus(
-    headers: Map<string, Uint8Array> | null = null,
+    headers: Map<string, Uint8Array<ArrayBuffer>> | null = null,
   ): Promise<Status> {
     await this.call(headers);
     const dispatchStatusNode = this.getOutput('__dispatch_status__', false);

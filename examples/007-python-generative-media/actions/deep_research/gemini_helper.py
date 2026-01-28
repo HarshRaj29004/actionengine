@@ -1,43 +1,24 @@
-from functools import lru_cache
-
-from google import genai
-from google.genai import types
-from google.genai.types import (
-    GenerateContentConfig,
-    ThinkingConfig,
-    GoogleSearch,
-)
+import actionengine
 
 
-@lru_cache(maxsize=1)
-def get_gemini_client(api_key: str):
-    return genai.client.AsyncClient(
-        genai.client.BaseApiClient(
-            api_key=api_key,
-        )
-    )
-
-
-async def generate_content_stream(
+async def prepare_generate_content_action(
+    action_registry: actionengine.ActionRegistry,
+    chat_input: str,
     api_key: str,
-    contents: str,
-    *,
-    model: str = "gemini-2.5-flash",
-    config: GenerateContentConfig | None = None,
-    system_instruction_override: types.ContentUnion | None = None,
+    session_token: str = "",
+    system_instructions: list[str] | None = None,
 ):
-    client = get_gemini_client(api_key)
+    node_map = actionengine.NodeMap()
+    action = action_registry.make_action("generate_content", node_map=node_map)
+    await action["chat_input"].put_and_finalize(chat_input)
+    await action["api_key"].put_and_finalize(api_key)
+    await action["session_token"].put_and_finalize(session_token)
 
-    config = config or GenerateContentConfig(
-        thinking_config=ThinkingConfig(
-            include_thoughts=True,
-            thinking_budget=2048,
-        ),
-        tools=[types.Tool(google_search=GoogleSearch())],
-    )
-    if system_instruction_override is not None:
-        config.system_instruction = system_instruction_override
+    if system_instructions:
+        for instruction in system_instructions:
+            await action["system_instructions"].put(instruction)
+    await action["system_instructions"].finalize()
 
-    return await client.models.generate_content_stream(
-        model=model, contents=contents, config=config
-    )
+    action.clear_outputs_after_run(False)
+
+    return action

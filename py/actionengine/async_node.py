@@ -146,21 +146,23 @@ class AsyncNode(_C.nodes.AsyncNode):
         )
 
     def next_chunk_sync(self, timeout: float = -1.0) -> Optional[Chunk]:
-        return super().next_chunk(timeout)  # pytype: disable=attribute-error
+        return _C.nodes.AsyncNode.next_chunk(
+            self, timeout
+        )  # pytype: disable=attribute-error
 
     async def next_fragment(
         self, timeout: float = -1.0
     ) -> Optional[NodeFragment]:
         """Returns the next fragment in the store, or None if the store is empty."""
-        return await asyncio.create_task(
-            asyncio.to_thread(self.next_fragment_sync, timeout)
-        )
+        return await asyncio.to_thread(self.next_fragment_sync, timeout)
 
     def next_fragment_sync(
         self, timeout: float = -1.0
     ) -> Optional[NodeFragment]:
         """Returns the next fragment in the store, or None if the store is empty."""
-        return super().next_fragment(timeout)  # pytype: disable=attribute-error
+        return _C.nodes.AsyncNode.next_fragment(
+            self, timeout
+        )  # pytype: disable=attribute-error
 
     def put_fragment(
         self, fragment: NodeFragment, seq: int = -1
@@ -178,8 +180,8 @@ class AsyncNode(_C.nodes.AsyncNode):
           None if the fragment was put synchronously with no event loop, or an
           awaitable if the fragment was put asynchronously within an event loop.
         """
-        return super().put_fragment(
-            fragment, seq
+        return _C.nodes.AsyncNode.put_fragment(
+            self, fragment, seq
         )  # pytype: disable=attribute-error
 
     def put_chunk(
@@ -199,8 +201,8 @@ class AsyncNode(_C.nodes.AsyncNode):
           None if the chunk was put synchronously with no event loop, or an
           awaitable if the chunk was put asynchronously within an event loop.
         """
-        return super().put_chunk(
-            chunk, seq, final
+        return _C.nodes.AsyncNode.put_chunk(
+            self, chunk, seq, final
         )  # pytype: disable=attribute-error,
 
     def put_and_finalize(
@@ -292,7 +294,9 @@ class AsyncNode(_C.nodes.AsyncNode):
     # pylint: disable-next=[useless-parent-delegation]
     def get_id(self) -> str:
         """Returns the id of the node."""
-        return super().get_id()  # pytype: disable=attribute-error
+        return _C.nodes.AsyncNode.get_id(
+            self
+        )  # pytype: disable=attribute-error
 
     def set_reader_options(
         self,
@@ -317,7 +321,8 @@ class AsyncNode(_C.nodes.AsyncNode):
           The node itself.
         """
 
-        super().set_reader_options(  # pytype: disable=attribute-error
+        _C.nodes.AsyncNode.set_reader_options(  # pytype: disable=attribute-error
+            self,
             ordered,
             remove_chunks,
             n_chunks_to_buffer,

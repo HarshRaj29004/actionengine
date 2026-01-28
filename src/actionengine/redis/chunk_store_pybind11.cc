@@ -80,7 +80,8 @@ py::module_ MakeRedisModule(py::module_ scope, std::string_view name) {
                                                         ttl_duration);
            }),
            py::arg("redis"), py::arg("id"), py::arg("ttl"),
-           keep_event_loop_memo(), py::keep_alive<0, 1>())
+           keep_event_loop_memo(), py::keep_alive<0, 1>(),
+           py::call_guard<py::gil_scoped_release>())
       .def(
           "get",
           [](const std::shared_ptr<redis::ChunkStore>& self, int seq,

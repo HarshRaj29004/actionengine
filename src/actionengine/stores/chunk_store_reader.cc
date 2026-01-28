@@ -300,7 +300,9 @@ absl::Status ChunkStoreReader::RunPrefetchLoop()
 
     ++total_chunks_read_;
 
+    mu_.unlock();
     buffer_->writer()->Write(std::make_pair(next_seq, std::move(next_chunk)));
+    mu_.lock();
   }
 
   buffer_->writer()->Close();

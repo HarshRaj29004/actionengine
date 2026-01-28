@@ -4,17 +4,17 @@ import re
 import threading
 
 import actionengine
-import torch
-from transformers import (
-    AsyncTextIteratorStreamer,
-    AutoModelForImageTextToText,
-    AutoProcessor,
-)
 
 MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
 
 
 def get_model_and_processor():
+    import torch
+    from transformers import (
+        AutoModelForImageTextToText,
+        AutoProcessor,
+    )
+
     if not hasattr(get_model_and_processor, "model"):
         get_model_and_processor.model = (
             AutoModelForImageTextToText.from_pretrained(
@@ -82,6 +82,8 @@ SCHEMA = actionengine.ActionSchema(
 
 
 async def run(action: actionengine.Action):
+    from transformers import AsyncTextIteratorStreamer
+
     model, processor = get_model_and_processor()
     user_log = action["_user_log"]
 

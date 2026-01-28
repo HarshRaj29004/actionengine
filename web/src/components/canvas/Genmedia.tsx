@@ -38,6 +38,7 @@ import {
 } from '@/components/canvas/DrawingCanvas'
 import { SpecialInputs } from 'leva/plugin'
 import { ActionEngineContext } from '@/helpers/actionengine'
+import { GENERATE_CONTENT_SCHEMA } from '../../actions/chat'
 
 const IsSelected = trait()
 
@@ -59,19 +60,7 @@ const Progress = trait(() => {
 const registerGenerateContentAction = (registry: ActionRegistry) => {
   registry.register(
     'generate_content',
-    {
-      name: 'generate_content',
-      inputs: [
-        { name: 'api_key', type: 'text/plain' },
-        { name: 'session_token', type: 'text/plain' },
-        { name: 'chat_input', type: 'text/plain' },
-      ],
-      outputs: [
-        { name: 'output', type: 'text/plain' },
-        { name: 'thoughts', type: 'text/plain' },
-        { name: 'new_session_token', type: 'text/plain' },
-      ],
-    },
+    GENERATE_CONTENT_SCHEMA,
     async (_: Action) => {},
   )
 }
@@ -155,6 +144,7 @@ const useBlobControls = () => {
             await action
               .getInput('session_token')
               .putAndFinalize(makeTextChunk(''))
+            await action.getInput('system_instructions').finalize()
             await action
               .getInput('chat_input')
               .putAndFinalize(makeTextChunk(kCreatePromptPrompt))
@@ -369,18 +359,17 @@ export const GenmediaExample = () => {
     const action = makeAction('generate_content', actionEngine)
     await action.call()
 
-    const apiKeyNode = action.getInput('api_key')
-    await apiKeyNode.putAndFinalize(makeTextChunk('ollama'))
+    await action.getInput('api_key').putAndFinalize(makeTextChunk('ollama'))
+    await action.getInput('session_token').putAndFinalize(makeTextChunk(''))
 
-    const sessionTokenNode = action.getInput('session_token')
-    await sessionTokenNode.putAndFinalize(makeTextChunk(''))
-
-    const chatInputNode = action.getInput('chat_input')
-    await chatInputNode.putAndFinalize(
-      makeTextChunk(
-        'surprise me with a prompt to generate a really nice image. keep it short. only use small letters and no punctuation. only output one prompt. do NOT think much. This prompt MUST be a simple description. --nothink',
-      ),
-    )
+    await action.getInput('system_instructions').finalize()
+    await action
+      .getInput('chat_input')
+      .putAndFinalize(
+        makeTextChunk(
+          'surprise me with a prompt to generate a really nice image. keep it short. only use small letters and no punctuation. only output one prompt. do NOT think much. This prompt MUST be a simple description. --nothink',
+        ),
+      )
 
     const outputNode = action.getOutput('output')
     const iterateOutput = async () => {

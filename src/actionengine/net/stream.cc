@@ -34,15 +34,16 @@ bool WireStream::HasAttachedBufferingBehaviour() const {
 namespace net {
 
 MergeWireMessagesWhileInScope::MergeWireMessagesWhileInScope(WireStream* stream)
-    : stream_(stream) {
-  CHECK(stream_);
-}
+    : stream_(stream) {}
 
 MergeWireMessagesWhileInScope::~MergeWireMessagesWhileInScope() {
   Finalize().IgnoreError();
 }
 
 absl::Status MergeWireMessagesWhileInScope::Attach() {
+  if (stream_ == nullptr) {
+    return absl::OkStatus();
+  }
   return stream_->AttachBufferingBehaviour(this);
 }
 
@@ -86,6 +87,9 @@ absl::Status MergeWireMessagesWhileInScope::ForceFlushInternal() {
       buffered_message_.actions.empty()) {
     return absl::OkStatus();
   }
+  if (stream_ == nullptr) {
+    return absl::OkStatus();
+  }
   absl::Status status =
       stream_->SendWithoutBuffering(std::move(buffered_message_));
   buffered_message_ = WireMessage{};
@@ -93,6 +97,9 @@ absl::Status MergeWireMessagesWhileInScope::ForceFlushInternal() {
 }
 
 absl::Status MergeWireMessagesWhileInScope::GetStatus() const {
+  if (stream_ == nullptr) {
+    return absl::OkStatus();
+  }
   return stream_->GetStatus();
 }
 
@@ -101,6 +108,9 @@ absl::Status MergeWireMessagesWhileInScope::Finalize() {
   send_allowed_ = false;
   absl::Status status;
   status.Update(ForceFlushInternal());
+  if (stream_ == nullptr) {
+    return status;
+  }
   status.Update(stream_->AttachBufferingBehaviour(nullptr));
   return status;
 }

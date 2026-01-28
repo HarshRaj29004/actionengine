@@ -90,6 +90,7 @@ const registerDeepResearchAction = (registry: ActionRegistry) => {
       outputs: [
         { name: 'report', type: 'text/plain' },
         { name: 'actions', type: '__BaseModel__' },
+        { name: 'user_log', type: 'text/plain' },
       ],
     },
     async (_: Action) => {},

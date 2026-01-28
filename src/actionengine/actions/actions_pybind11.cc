@@ -42,100 +42,58 @@ namespace act::pybindings {
 
 namespace py = ::pybind11;
 
-struct FutureOrTaskHolder {
-  explicit FutureOrTaskHolder(py::object obj) {
-    future_or_task = std::move(obj);
-  }
-
-  py::object future_or_task;
-};
-
-ActionHandler MakeStatusAwareActionHandler(py::handle py_handler) {
+ActionHandler MakeSimpleActionHandler(py::handle py_handler) {
   py::gil_scoped_acquire gil;
   py_handler = py_handler.inc_ref();
-  const py::function iscoroutinefunction =
-      py::module_::import("inspect").attr("iscoroutinefunction");
-  const bool is_coroutine = py::cast<bool>(iscoroutinefunction(py_handler));
 
   ActionHandler handler =
-      [py_handler,
-       is_coroutine](const std::shared_ptr<Action>& action) -> absl::Status {
+      [py_handler](const std::shared_ptr<Action>& action) -> absl::Status {
     py::gil_scoped_acquire gil;
+    const py::object coro = py_handler(action);
+    ASSIGN_OR_RETURN(const py::object future,
+                     RunThreadsafeIfCoroutine(coro, GetGloballySavedEventLoop(),
+                                              /*return_future=*/true));
 
-    action->SetUserData(nullptr);
+    thread::PermanentEvent done;
+    auto future_done_callback = py::cpp_function([&done](py::handle) {
+      py::gil_scoped_acquire gil;
+      done.Notify();
+    });
+    future.attr("add_done_callback")(std::move(future_done_callback));
 
+    {
+      py::gil_scoped_release release;
+      thread::Select({done.OnEvent(), thread::OnCancel(), action->OnCancel()});
+    }
+
+    const bool future_done = future.attr("done")().cast<bool>();
+    const bool future_cancelled = future.attr("cancelled")().cast<bool>();
+
+    if (future_done && !future_cancelled) {
+      return absl::OkStatus();
+    }
+
+    const bool thread_or_action_cancelled =
+        thread::Cancelled() || action->Cancelled();
+    if (thread_or_action_cancelled && !future_cancelled) {
+      auto _ = future.attr("cancel")();
+      const absl::Time deadline = !thread_or_action_cancelled
+                                      ? absl::InfiniteFuture()
+                                      : absl::Now() + absl::Seconds(10);
+      py::gil_scoped_release release;
+      thread::SelectUntil(deadline, {done.OnEvent()});
+    }
+
+    if (future_cancelled && !future_done) {
+      return absl::CancelledError("Future was cancelled, but not done.");
+    }
+
+    // At this point, the future is done, but it might have failed.
+    // If it failed, this will catch and propagate the exception.
     try {
-      if (is_coroutine) {
-        // If the handler is a coroutine, we need to run it in the event loop.
-
-        const py::function get_running_loop =
-            py::module_::import("asyncio").attr("get_running_loop");
-        py::object loop = py::none();
-        try {
-          loop = get_running_loop();
-        } catch (py::error_already_set&) {
-          // No running loop found, we will use the globally saved one.
-        }
-
-        const py::object coro = py_handler(action);
-        if (!loop.is_none()) {
-          action->SetUserData(std::make_shared<FutureOrTaskHolder>(
-              loop.attr("create_task")(coro)));
-          return absl::OkStatus();
-        }
-
-        ASSIGN_OR_RETURN(
-            const py::object future,
-            RunThreadsafeIfCoroutine(coro, GetGloballySavedEventLoop(),
-                                     /*return_future=*/true));
-
-        thread::PermanentEvent done;
-        auto future_done_callback = py::cpp_function([&done](py::handle) {
-          py::gil_scoped_acquire gil;
-          done.Notify();
-        });
-        future.attr("add_done_callback")(std::move(future_done_callback));
-        {
-          py::gil_scoped_release release;
-          thread::Select(
-              {done.OnEvent(), thread::OnCancel(), action->OnCancel()});
-        }
-
-        const bool cancelled = thread::Cancelled() || action->Cancelled();
-        // If we were cancelled, we need to cancel the future.
-        if (cancelled) {
-          auto _ = future.attr("cancel")();
-        }
-        // Even if we were cancelled, we still need to wait for the future to
-        // finish to avoid resource leaks and no-GIL refcount change attempts.
-        {
-          const absl::Time deadline = !cancelled
-                                          ? absl::InfiniteFuture()
-                                          : absl::Now() + absl::Seconds(10);
-          py::gil_scoped_release release;
-          thread::SelectUntil(deadline, {done.OnEvent()});
-        }
-        if (cancelled) {
-          return absl::CancelledError(
-              "Action handler was cancelled while waiting for the "
-              "coroutine.");
-        }
-
-        // At this point, the future is done, but it might have failed.
-        // If it failed, this will catch and propagate the exception.
-        try {
-          auto _ = future.attr("result")();
-        } catch (py::error_already_set& e) {
-          return absl::InternalError(absl::StrCat(e.what()));
-        }
-
-        return absl::OkStatus();
-      }
-      // (else), if the handler is not a coroutine, we can call it directly.
-      auto _ = py_handler(action);
+      auto _ = future.attr("result")();
     } catch (py::error_already_set& e) {
-      return absl::InternalError(
-          absl::StrCat("Python error in action handler: ", e.what()));
+      return absl::InternalError(absl::StrCat(e.what()));
     }
     return absl::OkStatus();
   };
@@ -178,8 +136,8 @@ void BindActionRegistry(py::handle scope, std::string_view name) {
           "register",
           [](const std::shared_ptr<ActionRegistry>& self, std::string_view name,
              const ActionSchema& def, py::function handler) {
-            return self->Register(
-                name, def, MakeStatusAwareActionHandler(std::move(handler)));
+            return self->Register(name, def,
+                                  MakeSimpleActionHandler(std::move(handler)));
           },
           py::arg("name"), py::arg("definition"), py::arg("handler"))
       .def(
@@ -250,6 +208,15 @@ void BindAction(py::handle scope, std::string_view name) {
          },
          pybindings::keep_event_loop_memo(),
          py::call_guard<py::gil_scoped_release>())
+      .def(
+          "run_in_background",
+          [](const std::shared_ptr<Action>& action)
+              -> absl::StatusOr<std::shared_ptr<Action>> {
+            thread::Detach({}, [action]() { action->Run().IgnoreError(); });
+            return action;
+          },
+          pybindings::keep_event_loop_memo(),
+          py::call_guard<py::gil_scoped_release>())
       .def(
           "call",
           [](const std::shared_ptr<Action>& action, py::handle headers_obj) {
@@ -384,7 +351,7 @@ void BindAction(py::handle scope, std::string_view name) {
           "bind_handler",
           [](const std::shared_ptr<Action>& self, py::function handler) {
             return self->BindHandler(
-                MakeStatusAwareActionHandler(std::move(handler)));
+                MakeSimpleActionHandler(std::move(handler)));
           },
           py::arg("handler"))
       .def(

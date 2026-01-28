@@ -5,7 +5,7 @@ import traceback
 
 import actionengine
 
-from .gemini_helper import generate_content_stream
+from .gemini_helper import prepare_generate_content_action
 
 SYSTEM_INSTRUCTIONS = [
     "You are a helpful research assistant that helps to create a research plan.",
@@ -41,33 +41,39 @@ async def run(action: actionengine.Action):
 
         prompt = f"Here is the research topic: {topic}"
 
-        try:
-            await action["user_log"].put(
-                f"[create_plan] Creating plan for topic: {topic}."
-            )
-            logger.info(f"{action.get_id()} Creating plan for topic: {topic}.")
-            async for response in await generate_content_stream(
-                api_key=api_key,
-                contents=prompt,
-                system_instruction_override=SYSTEM_INSTRUCTIONS,
-            ):
-                for candidate in response.candidates:
-                    for part in candidate.content.parts:
-                        if not part.thought:
-                            response_parts.append(part)
-                        else:
-                            await action["thoughts"].put(part.text)
-        finally:
+        await action["user_log"].put(
+            f"[create_plan] Creating plan for topic: {topic}."
+        )
+        logger.info(f"{action.get_id()} Creating plan for topic: {topic}.")
+        generate_content = await prepare_generate_content_action(
+            action.get_registry(),
+            chat_input=prompt,
+            api_key=api_key,
+            system_instructions=SYSTEM_INSTRUCTIONS,
+        )
+        generate_content.run()
+
+        async def forward_thoughts():
+            async for thought in generate_content["thoughts"]:
+                await action["thoughts"].put(thought)
             await action["thoughts"].finalize()
+
+        forward_thoughts_coro = forward_thoughts()
+
+        async for chunk in generate_content["output"]:
+            response_parts.append(chunk)
+        await forward_thoughts_coro
 
         await action["user_log"].put("[create_plan] Processing plan items.")
         logger.info(
             f"{action.get_id()} Processing plan items.",
         )
 
-        full_response = "".join([part.text for part in response_parts])
+        full_response = "".join(response_parts)
         lines = full_response.split("\n")
-        lines_no_numbers = [" ".join(line.split()[1:]) for line in lines]
+        lines_no_numbers = [
+            " ".join(line.split()[1:]) for line in lines if line.strip()
+        ]
 
         plan_items = action["plan_items"]
         try:

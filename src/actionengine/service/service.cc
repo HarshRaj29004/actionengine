@@ -197,6 +197,10 @@ StreamHandler Service::EnsureCleanupOnDone(StreamHandler handler) {
     }
 
     if (session->GetNumActiveConnections() == 0) {
+      auto node_map_it = node_maps_.find(stream_to_session_.at(stream_id));
+      DCHECK(node_map_it != node_maps_.end());
+      node_map_it->second->FlushAllWriters();
+      node_map_it->second->CancelAllReaders();
       sessions_.erase(stream_to_session_.at(stream_id));
       node_maps_.erase(stream_to_session_.at(stream_id));
     }

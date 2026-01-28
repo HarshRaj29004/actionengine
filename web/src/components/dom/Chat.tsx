@@ -25,8 +25,11 @@ export function Chat(props: ChatProps) {
   const { messages } = props
   const [input, setInput] = useState('')
 
+  const lengthRef = useRef(0)
   const messagesEndRef = useRef(null)
   useEffect(() => {
+    if (lengthRef.current === messages.length) return
+    lengthRef.current = messages.length
     messagesEndRef.current?.scrollIntoView({
       behavior: 'smooth',
       block: 'start',

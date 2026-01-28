@@ -4,7 +4,7 @@ import os
 
 import actionengine
 
-from .gemini_helper import generate_content_stream
+from .gemini_helper import prepare_generate_content_action
 
 
 SYSTEM_INSTRUCTIONS = [
@@ -54,22 +54,27 @@ async def run(action: actionengine.Action):
         if api_key in ("alpha-demos",):
             api_key = os.environ.get("GEMINI_API_KEY", "")
 
-        async for response in await generate_content_stream(
+        generate_content = await prepare_generate_content_action(
+            action.get_registry(),
+            chat_input=prompt,
             api_key=api_key,
-            contents=prompt,
-            system_instruction_override=SYSTEM_INSTRUCTIONS,
-        ):
-            for candidate in response.candidates:
-                for part in candidate.content.parts:
-                    if not part.thought:
-                        await action["report"].put(part.text)
-                        print(part.text, end="", flush=True)
-                    else:
-                        await action["thoughts"].put(part.text)
+            system_instructions=SYSTEM_INSTRUCTIONS,
+        )
+        generate_content.run()
+
+        async def forward_thoughts():
+            async for thought in generate_content["thoughts"]:
+                await action["thoughts"].put(thought)
+            await action["thoughts"].finalize()
+
+        forward_thoughts_coro = forward_thoughts()
+
+        async for chunk in generate_content["output"]:
+            await action["report"].put(chunk)
+        await action["report"].finalize()
+        await forward_thoughts_coro
 
     finally:
-        await action["report"].finalize()
-        await action["thoughts"].finalize()
         await action["user_log"].put_and_finalize(
             f"[synthesise_findings] Synthesis complete."
         )

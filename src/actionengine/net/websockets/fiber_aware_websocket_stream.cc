@@ -26,7 +26,7 @@
 
 namespace act::net {
 
-static constexpr std::string_view kVersionString = "Action Engine 0.3.3";
+static constexpr std::string_view kVersionString = "Action Engine 0.4.0";
 static constexpr absl::Duration kDebugWarningTimeout = absl::Seconds(5);
 
 BoostWebsocketStream::BoostWebsocketStream(

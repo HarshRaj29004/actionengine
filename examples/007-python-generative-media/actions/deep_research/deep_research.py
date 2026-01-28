@@ -47,10 +47,6 @@ async def run(action: actionengine.Action):
         plan_items = [item async for item in create_plan["plan_items"]]
         research_briefs, synthesis_brief = plan_items[:-1], plan_items[-1]
 
-        # await action["user_log"].put(
-        #     f"[deep_research-{action.get_id()}] Scheduling investigations."
-        # )
-
         investigations = []
         for idx, brief in enumerate(research_briefs):
             investigate = action.make_action_in_same_session(
@@ -99,9 +95,9 @@ async def run(action: actionengine.Action):
     finally:
         await action["actions"].finalize()
         await action["report"].finalize()
-        # await action["user_log"].put_and_finalize(
-        #     f"[deep_research-{action.get_id()}] Deep research complete."
-        # )
+        await action["user_log"].put_and_finalize(
+            f"[deep_research-{action.get_id()}] Deep research complete."
+        )
 
 
 SCHEMA = actionengine.ActionSchema(

@@ -65,6 +65,13 @@ class NodeMap {
   NodeMap(NodeMap&& other) noexcept;
   NodeMap& operator=(NodeMap&& other) noexcept;
 
+  void CancelAllReaders() {
+    act::MutexLock lock(&mu_);
+    for (auto& [_, node] : nodes_) {
+      node->GetReader().Cancel();
+    }
+  }
+
   void FlushAllWriters() {
     act::MutexLock lock(&mu_);
     for (auto& [_, node] : nodes_) {

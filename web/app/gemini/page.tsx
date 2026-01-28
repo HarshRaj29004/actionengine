@@ -101,14 +101,19 @@ export default function Page() {
       const action = makeAction('rehydrate_session', actionEngine)
       action.call().then()
 
-      const sessionTokenNode = action.getInput('session_token')
-      await sessionTokenNode.putAndFinalize(makeTextChunk(sessionToken || ''))
+      await action
+        .getInput('session_token')
+        .putAndFinalize(makeTextChunk(sessionToken || ''))
 
-      const previousMessagesNode = action.getOutput('previous_messages')
-      rehydrateMessages(previousMessagesNode, setMessages).then()
+      rehydrateMessages(
+        action.getOutput('previous_messages'),
+        setMessages,
+      ).then()
 
-      const previousThoughtsNode = action.getOutput('previous_thoughts')
-      rehydrateThoughts(previousThoughtsNode, setThoughts).then()
+      rehydrateThoughts(
+        action.getOutput('previous_thoughts'),
+        setThoughts,
+      ).then()
     }
     actionEngine.stream.waitUntilReady().then(() => {
       setRehydrated(true)
@@ -154,6 +159,7 @@ export default function Page() {
       .getInput('session_token')
       .putAndFinalize(makeTextChunk(sessionToken || ''))
 
+    await action.getInput('system_instructions').finalize()
     await action.getInput('chat_input').putAndFinalize(makeTextChunk(msg.text))
     await action.getInput('api_key').putAndFinalize(makeTextChunk(apiKey))
 
